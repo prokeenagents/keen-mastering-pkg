@@ -1,0 +1,66 @@
+---
+name: keen-start
+description: The Keen session entry point — welcome banner, then "List existing projects" or "Create new project". A project = one Keen space; its ids and settings live in working_dir/<spaceId>/. Create runs the whole 15-step organization setup end to end and saves the result; List reloads a saved project and continues where it left off.
+disable-model-invocation: true
+allowed-tools: Bash Read Write Edit AskUserQuestion
+---
+
+Work from the package root (the folder holding `.claude/`). Never print a secret in a reply; never write a secret anywhere but `working_dir/<spaceId>/.env`.
+
+**Resumability.** This flow spans many turns. If the person's message is an answer to a wizard question (or "continue" / `/keen-start` again mid-way), do NOT restart from the banner — pick up at the next unanswered question or the next unfinished step. Keep a running draft at `working_dir/.draft.json` (answers + completed step numbers + ids created so far, NO secrets); write it after every wizard answer and after every provisioning step, delete it on success. On start, if `.draft.json` exists, offer **Resume the unfinished project** as the first menu option and continue from its state (re-check that already-created ids still exist before reusing them).
+
+## 1. Banner (always, verbatim shape — fill the status lines from REAL checks)
+```
+WELCOME TO KEENAGENTS
+  MCP server "keen": <connected | pending approval | not registered>   ← `claude mcp list` / the `keen` tools being callable
+  Toolkit: keen-validate + keen-deploy <found on PATH | missing — run /keen-install>   ← `command -v`
+  Projects: <N> in working_dir/
+```
+**Gate:** if either binary is missing from PATH or `agent-runner/node_modules` is absent, do NOT show the menu — say "The toolkit is not installed on this machine yet — run /keen-install first (one time), then /keen-start." and stop.
+Then ONE question (AskUserQuestion): **"List existing projects"** / **"Create new project"** / **"Just connect"** (plus **"Resume the unfinished project"** when `working_dir/.draft.json` exists). If `working_dir/` has no projects, omit List. When the person picks Create or Just connect, immediately ask its first question in the SAME turn; never end a turn on the menu answer.
+
+## 2. List existing projects
+Read every `working_dir/*/project.json`. Then ALWAYS ask with AskUserQuestion — **one option per project** (label = space title; description = `spaceId · agent slug · sandbox host · created`) plus a last option **"Cancel"** — so the person picks with the arrow keys. This holds even when there is exactly ONE project: never auto-select, never skip the question, never open a project the person did not pick. (More than 3 projects → show the first 3 + "Show more…" and page.) On "Cancel" go back to the main menu. Then, for the chosen project:
+1. Load `working_dir/<spaceId>/project.json` and `.env` (secrets — read, never echo).
+2. Point the MCP server at `project.sandbox.mcpUrl` (edit `.mcp.json`'s `keen.url` if it differs; tell the person to run `/mcp` if the tools are not live yet).
+3. `mcp_login { id: project.mcpAccount.id, secret: <from .env MCP_ACCOUNT_SECRET> }`.
+4. Sanity: `get_space { id: spaceId }` and `get_api_key { id }` — if either is gone, say exactly which and stop.
+5. Report: "Continuing project <title> — space <id>, agent <slug>, api key <id>, consumer <id>. Runner .env: working_dir/<spaceId>/.env. What next?" Then wait.
+
+## 2b. Just connect (no project — ad-hoc work as an MCP account)
+Ask, one at a time, each a "Type my own" answer: sandbox URL (plainly — derive LOCAL/SANDBOX silently as in Q7), MCP account ID, MCP account secret (say once it passes through the chat; it is kept for this session only, written nowhere). Point `.mcp.json` at the derived mcpUrl (tell the person to run `/mcp` if the tools are not live), `mcp_login`, then `list_spaces` and report the count. Nothing is saved; end with "Connected as <id> on <host>. Say what you need — or run /keen-start again to create a project."
+
+## 3. Create new project — the wizard (AskUserQuestion, one at a time; defaults in brackets)
+**The person supplies the values — you never propose them.** Two kinds of question:
+- **Required, no default** (space name, agent name, sandbox URL, MCP account ID, MCP account secret, flow project path, entanglement path): ask with a single option **"Type my own"** and WAIT. Do not suggest values, do not pre-fill from memory, `.env` files, earlier projects or anything on disk, do not guess a path — even if you know a plausible one. An empty answer → ask again.
+- **Optional with a default** (description = the space name; agent id = kebab-case of the agent name; Start Flow `Project`; Start Node `Main`): show the computed default as ONE option ("Use: Project") plus "Type my own".
+Never invent example values ("Demo Space", "Runner Lab 2") and never reuse an existing space's name.
+1. Space / project name (required). 2. Description [= name]. 3. Agent name (required). 4. Agent id [kebab-case of the agent name: lowercase letters, single dashes, digits stripped, 3–100 chars]. 5. Start Flow [`Project`]. 6. Start Node [`Main`] (both PascalCase 3–60). 7. Sandbox URL (required). Ask ONLY "What is the sandbox URL?" — nothing about local vs sandbox, ports or MCP endpoints; the person just knows the address they were given. Derive the mode SILENTLY from the answer: host `localhost`/`127.0.0.1` ⇒ mode LOCAL, mcpUrl `http://localhost:5545/mcp`; any other host ⇒ mode SANDBOX, mcpUrl `https://<host>/mcp`. Store mode + mcpUrl in the project; never surface them as choices. 8. MCP account ID (required; ask only for the ID). 9. MCP account secret (required — say once: "this passes through the chat transcript; it will be stored only in the project's .env"). 10. Path to the flow project directory (required). It may not exist yet, or be empty — that is the normal case for a new project: YOU scaffold it in step 13a. Accept any path; only refuse a path that exists and is a regular file. If it already holds `src/flows/*.flow`, treat it as an existing project (keep every file, scaffold only what is missing). 11. Path to the entanglement project (required; must contain `package.json` — if the person has no copy yet, tell them to run `/keen-entanglement-download` first, then come back with that folder).
+12. MCP Consumer — a real choice with exactly two options: **"Create a new one"** / **"Use an existing one"**. If "existing": ask for its **ID** and then its **secret** (each a "Type my own" answer; say once that the secret passes through the chat and is stored only in the project's `.env`). Do not offer any consumer you know of from other projects or memory.
+Validate each answer against the rule in brackets and re-ask on failure; expand `~` and store both paths as absolute. Then show a one-screen summary (no secret) and ask **Proceed / Change something**.
+
+## 4. Create — the run (the golden path, `keen-mcp-guide/README.md` §5; stop at the first failure and report the tool's status + message)
+1. Point `.mcp.json` at the mcpUrl; `mcp_login`.
+2. `create_space { title, description }` ⟶ spaceId, deploymentToken (from the reply / `get_space`).
+3. `create_agent { spaceId, displayName, agentId, startFlow, startNode }` ⟶ agent record id.
+4. `create_certificate { name: "<title> Cert" }` ⟶ certificateId. `create_client { name: "<title> Client" }` ⟶ clientId + secret (keep). `create_consumer_contract { name: "<title> Contract" }` ⟶ contractId; `assign_contract_spaces { id, spaceIds: [spaceId] }`; `update_consumer_contract_policy { id, outsideRegistration: true, otpInsideRegistration: false, otpOutsideRegistration: false, blockOutsideRegistrationLogins: false, blockSystemRegistrationLogins: false }`; `assign_contract_default_outside_spaces { id, spaceIds: [spaceId] }`.
+5. `create_api_key { name: "<title> Key" }` ⟶ apiKeyId + secret (keep).
+6. Entanglement: ensure `.env.local` exists (copy `.env.example`); write the host block for the mode, `KEEN_CLIENT_ID/SECRET`, `KEEN_API_KEY_ID/SECRET`, and `KEEN_ORIGIN=https://pending.local`; start it in the background with the mode's command (`npm run dev-local` LOCAL / `npm run dev` SANDBOX, `:win` variants on Windows); read the port from its `Local: http://localhost:<port>` line (never assume 3000); start `ngrok http <port>` in the background; read the public URL from ngrok's output (or `http://127.0.0.1:4040/api/tunnels`). If you cannot run background processes, give the person the exact commands and ask for the port + URL.
+7. `create_webhook { name: "<title> Webhook", origin: <ngrok>, webhook: "<ngrok>/api/keen-webhook" }` ⟶ webhookId.
+8. `update_api_key { id, clientId, certificateId, consumerContractId, webhookId }`.
+9. Set `KEEN_ORIGIN=<ngrok>` in `.env.local`; restart entanglement (stop the process, start it again with the same command; keep ngrok running).
+10. `rebuild_api_key_cache { id }` then `wake_api_key { id }` (a 400 names a missing binding — fix, don't retry blindly).
+11. The MCP consumer, per the wizard's choice:
+   - **new** → `create_mcp_consumer { name: "<agentId>-consumer", consumerContractId, space: [spaceId], enabled: true }` ⟶ consumer id + secret (keep both; the secret is shown once). If the name is taken (406 "already exists"), append `-2`, `-3`… and retry.
+   - **existing** → use the ID + secret the person gave. Bind it to this project's tenant: `assign_mcp_consumer_contract { id, consumerContractId }` then `assign_mcp_consumer_spaces { id, space: [spaceId] }` (a consumer belongs to ONE contract — say so if it was on another contract, because re-binding moves it); `set_mcp_consumer_enabled { id, enabled: true }` if it was disabled. If `get_mcp_consumer` says the ID does not exist, stop and ask again.
+12. `get_mcp_consumer_token { id, secret }` ⟶ access_token, refresh_token, expires_in. A 406 here with an existing consumer means the secret is wrong (or the consumer is disabled/unbound) — ask for the secret again, or offer to rotate it (`rotate_mcp_consumer_secret`, new secret shown once).
+13. Write the project files (section 5).
+13a. **Scaffold the flow project** (the same skeleton the Shira builder creates) — create only what is missing, never overwrite: `<flowDir>/package.json` = `{ "name": "<agentId>", "version": "0.0.1", "private": true, "type": "module" }`; `<flowDir>/src/keen-tools.json` = `{ "tools": [] }`; empty folders `<flowDir>/src/flows/` and `<flowDir>/src/scripts/tools/` (create BOTH even when unused — `keen-validate` warns on a missing `src/scripts`, and `mkdir -p` costs nothing; add a `.gitkeep` so an empty folder survives a copy). No `debux.js` (the deploy injects it). Then write the agent's first flow so the project is runnable: `<flowDir>/src/flows/<StartFlow>.flow` with a `<StartNode>` start node → one Agent node (agentName = the agent name, agentId = the slug, the default llm from `shira-flow-builder-guide/minimal-agent.md`) → an End node, exactly per `minimal-agent.md`, and `<flowDir>/src/scripts/init.js` only if that example needs one. Run `keen-validate` on it before deploying.
+14. `keen-validate` on the flow dir; if 0 errors, `keen-deploy` from `working_dir/<spaceId>/` (its `.env` carries KEEN_DEPLOY_TOKEN + KEEN_PROJECT_DIR); report `deployed`/`rejected`. If validation fails on the scaffolded flow, show the findings and stop (the person decides) — never deploy a failing project.
+15. Report the summary table (ids only, no secrets) and: "Test prompt: `cd working_dir/<spaceId> && npx --prefix ../../agent-runner tsx ../../agent-runner/run.ts --prompt \"hello\"`".
+
+## 5. Project files — `working_dir/<spaceId>/`
+- `project.json` (NO secrets): `{ "version": 1, "createdAt", "sandbox": { "mode": "LOCAL|SANDBOX", "host", "mcpUrl" }, "space": { "id", "title", "description" }, "agent": { "id", "agentId", "displayName", "startFlow", "startNode" }, "mcpAccount": { "id" }, "chain": { "certificateId", "clientId", "contractId", "webhookId", "apiKeyId", "origin", "webhookUrl", "port" }, "consumer": { "id", "name", "origin": "created|provided" }, "paths": { "flowProject", "entanglement" } }`.
+- `.env` (chmod 600; the agent-runner + keen-deploy read it from this dir): `KEEN_HOST`, `KEEN_TOKEN`, `KEEN_USER_ID`, `KEEN_EMAIL=agent@runner.local`, `KEEN_ORIGIN`, `KEEN_SPACE_ID`, `KEEN_AGENT`, `KEEN_DEPLOY_TOKEN`, `KEEN_PROJECT_DIR` (ABSOLUTE path — the tools read `.env` from the cwd and resolve this relative to it), `KEEN_TLS_INSECURE=true` (LOCAL only), plus `MCP_ACCOUNT_ID`, `MCP_ACCOUNT_SECRET`, `KEEN_CONSUMER_SECRET`, `KEEN_REFRESH_TOKEN`.
+- `entanglement.env` — the exact block written into the site's `.env.local` (secrets included; chmod 600).
+Keep a copy of the previous `.env` as `.env.bak` before overwriting on a re-run.

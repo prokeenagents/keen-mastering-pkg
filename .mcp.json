@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "keen": {
+      "type": "http",
+      "url": "http://localhost:5545/mcp"
+    }
+  }
+}

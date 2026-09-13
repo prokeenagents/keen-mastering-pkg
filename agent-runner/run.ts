@@ -1,0 +1,352 @@
+/**
+ * agent-runner — a headless bridge that lets a BUILDING agent (Codex / Claude)
+ * run a Keen flow and SEE it: the live onStream progress AND the returned
+ * flow-tree (node-by-node request → response), all as plain text on stdout. No
+ * containers, no browser. The agent shells out to this and reads the output.
+ *
+ * The runner subscribes to onStream on the agent's behalf and turns every frame
+ * into a line of stdout — THAT is the "hook": the JS callback lives here, its
+ * output is the agent's input.
+ *
+ *   node --import tsx run.ts \
+ *     --host <keenHost> --space <spaceId> --agent <agentSlug> \
+ *     --token <consumerAccessToken> --prompt "build me an offer" [--json]
+ *
+ * The WS endpoint derives from the bare KEEN_HOST: wss://<host>/ws-keen.
+ * Auth is token-only: pass a consumer --token (KEEN_TOKEN); its `sub` is sealed,
+ * so also supply --user-id (KEEN_USER_ID) and --email (KEEN_EMAIL) for identity.
+ */
+import 'dotenv/config';
+
+import { WebSocket } from 'ws';
+
+import ChatAPI from './sdk/index';
+
+/**
+ * The SDK calls `new WebSocket(url)` (the browser global). Provide it in Node,
+ * optionally stamping an Origin header — the Keen server silently drops a
+ * connection whose Origin is not allow-listed (a browser sends its page origin;
+ * a Node client sends none, so pass --origin <allowed>).
+ */
+function installWebSocket(origin?: string): void {
+    const Impl = origin
+        ? class extends WebSocket {
+              constructor(address: string, protocols?: string | string[]) {
+                  super(address, protocols, { origin });
+              }
+          }
+        : WebSocket;
+
+    (globalThis as unknown as { WebSocket: typeof WebSocket }).WebSocket = Impl;
+}
+
+// ----------------------------------------------------------------- args
+
+type Args = Record<string, string | boolean>;
+
+function parseArgs(argv: string[]): Args {
+    const args: Args = {};
+
+    for (let i = 0; i < argv.length; i++) {
+        const token = argv[i];
+
+        if (!token.startsWith('--')) {
+            continue;
+        }
+
+        const key = token.slice(2);
+        const next = argv[i + 1];
+
+        if (next === undefined || next.startsWith('--')) {
+            args[key] = true;
+        } else {
+            args[key] = next;
+            i++;
+        }
+    }
+
+    return args;
+}
+
+/**
+ * Cookies the building agent wants the flow's script nodes to see, as an
+ * explicit { name: value } map. There is NO browser here (document.cookie is
+ * empty in Node), so the agent supplies the values itself — exactly the cookie
+ * a real user's browser would carry (e.g. a Google-Connect token). Sources,
+ * later wins:
+ *   KEEN_COOKIES (.env)   — "name=value" pairs separated by ';' or newlines
+ *   --cookie name=value   — repeatable on the command line
+ * Returns undefined when none are given, so the SDK keeps its default.
+ * The engine stores them at cookieStorage:{cid}_{sid}; scripts read a value
+ * with `import Cookies from 'system/cookies'; Cookies.get('name')`.
+ */
+function parseCookies(argv: string[]): Record<string, string> | undefined {
+    const out: Record<string, string> = {};
+
+    const add = (pair: string): void => {
+        const idx = pair.indexOf('=');
+        if (idx <= 0) {
+            return;
+        }
+        const name = pair.slice(0, idx).trim();
+        if (name) {
+            out[name] = pair.slice(idx + 1).trim();
+        }
+    };
+
+    const fromEnv = process.env.KEEN_COOKIES;
+    if (fromEnv) {
+        fromEnv.split(/[;\n]/).forEach(pair => add(pair.trim()));
+    }
+    for (let i = 0; i < argv.length; i++) {
+        if (argv[i] === '--cookie' && argv[i + 1] !== undefined) {
+            add(argv[i + 1]);
+            i++;
+        }
+    }
+
+    return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function need(args: Args, key: string): string {
+    const value = args[key];
+
+    if (typeof value !== 'string' || value.length === 0) {
+        fail(`missing required --${key}`);
+    }
+
+    return value as string;
+}
+
+function fail(message: string): never {
+    process.stderr.write(`agent-runner: ${message}\n`);
+    process.exit(2);
+}
+
+// ---------------------------------------------------------------- token
+
+/** Decode a JWT payload WITHOUT verifying — we only read sub/email for the SDK identity; the relay verifies the signature. */
+function decodeJwt(token: string): { sub?: string; email?: string; [k: string]: unknown } {
+    const bare = token.replace(/^Bearer\s+/i, '').trim();
+    const parts = bare.split('.');
+
+    if (parts.length < 2) {
+        return {};
+    }
+
+    try {
+        return JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')) as Record<string, unknown>;
+    } catch {
+        return {};
+    }
+}
+
+/**
+ * Derive the WebSocket endpoint from the bare KEEN_HOST — the single source for
+ * every URL. Tolerates a stray scheme / trailing slash on the host value:
+ *   keen.example.com  →  wss://keen.example.com/ws-keen
+ */
+function wsFromHost(host: string): string {
+    const bare = host
+        .replace(/^[a-z]+:\/\//i, '')
+        .replace(/\/+$/, '');
+
+    return `wss://${bare}/ws-keen`;
+}
+
+// ----------------------------------------------------------------- emit
+
+function makeEmitter(json: boolean) {
+    return {
+        stream(event: string, data: unknown, rid?: string): void {
+            if (json) {
+                process.stdout.write(JSON.stringify({ t: 'stream', event, rid, data }) + '\n');
+            } else {
+                const text = typeof data === 'string' ? data : JSON.stringify(data);
+                process.stdout.write(`  ┃ ${event}${rid ? ` (${rid.slice(0, 8)})` : ''}: ${text}\n`);
+            }
+        },
+        node(flowId: string, bundle: unknown): void {
+            const b = bundle as { flowTask?: { flowContext?: { correlationId?: string } }; nodeTasks?: Array<Record<string, unknown>> };
+            if (json) {
+                process.stdout.write(JSON.stringify({ t: 'flow', flowId, flowTask: b.flowTask, nodeTasks: b.nodeTasks }) + '\n');
+            } else {
+                process.stdout.write(`\n▸ flow ${flowId.slice(0, 12)} — ${b.nodeTasks?.length ?? 0} node(s)\n`);
+                for (const n of b.nodeTasks ?? []) {
+                    const nc = (n.nodeContext as { kind?: string; id?: string }) ?? {};
+                    const resp = n.response ?? null;
+                    const shape = resp ? JSON.stringify(resp) : 'no response';
+                    process.stdout.write(`    • ${nc.kind ?? '?'} ${(nc.id ?? '').slice(0, 8)} → ${shape.slice(0, 500)}\n`);
+                }
+            }
+        },
+        meta(line: string): void {
+            if (json) {
+                process.stdout.write(JSON.stringify({ t: 'meta', line }) + '\n');
+            } else {
+                process.stderr.write(`agent-runner: ${line}\n`);
+            }
+        }
+    };
+}
+
+// ----------------------------------------------------------------- main
+
+const USAGE = `run.ts — run a live Keen flow and stream the trace back to a building agent.
+Step 3 of the build loop:  keen-validate  →  keen-deploy  →  run.ts.
+
+USAGE
+  npx tsx run.ts --prompt "…" [--json] [flags]
+
+CONFIG (flag first, then .env in the working dir)
+  --host     / KEEN_HOST        the bare Keen host, e.g. keen.example.com (required)
+                                — the WS endpoint derives: wss://<host>/ws-keen
+  --space    / KEEN_SPACE_ID    the AI space id (required)
+  --agent    / KEEN_AGENT       the agent SLUG (not the row id) (required)
+  --token    / KEEN_TOKEN       a consumer access_token (required; token-only auth)
+  --user-id  / KEEN_USER_ID     the consumer id — relay enforces userId === the token's sealed sub
+  --email    / KEEN_EMAIL       identity email (presence-checked; defaults to the token's email claim)
+  --origin   / KEEN_ORIGIN      Origin header — must be allow-listed, else the server drops the socket
+  --prompt                      the user turn (required, per-run)
+  --chat-id                     reuse a chat id to continue a conversation (default: a fresh one)
+  --cookie name=value           a cookie the flow's script nodes should see, read via
+                                system/cookies (repeatable). Also KEEN_COOKIES="a=1;b=2"
+                                in .env. Node has no browser, so you pass the value here —
+                                e.g. --cookie gconnect=<token> — as a real user's browser would.
+  --json                        NDJSON output (one object per frame) for the agent
+  -h --help                     this help
+
+projectID defaults to KEEN_SPACE_ID (space id === project id).
+
+For a self-signed dev cert, prefix the command with NODE_TLS_REJECT_UNAUTHORIZED=0.
+Full docs: agent-runner/README.md · agent-runner/docs/USAGE.md
+`;
+
+async function main(): Promise<void> {
+    const args = parseArgs(process.argv.slice(2));
+    if (args.help === true || process.argv.includes('-h') || process.argv.includes('--help')) {
+        process.stdout.write(USAGE);
+        process.exit(0);
+    }
+    const json = args.json === true;
+    const emit = makeEmitter(json);
+
+    // Every value: --flag first, then the .env var, then a default. So the agent
+    // fills .env once and just runs `run.ts --prompt "…"`; a flag overrides .env.
+    const pick = (argKey: string, envKey: string): string => {
+        const fromArg = args[argKey];
+        if (typeof fromArg === 'string' && fromArg.length > 0) {
+            return fromArg;
+        }
+        return process.env[envKey] ?? '';
+    };
+    const requirePick = (argKey: string, envKey: string, label: string): string => {
+        const value = pick(argKey, envKey);
+        if (!value) {
+            fail(`missing --${argKey} (or ${envKey} in .env) — ${label}`);
+        }
+        return value;
+    };
+
+    const origin = pick('origin', 'KEEN_ORIGIN');
+    installWebSocket(origin || undefined);
+
+    // Every URL derives from the single bare host — WS = wss://<host>/ws-keen.
+    const host = requirePick('host', 'KEEN_HOST', 'the Keen host, e.g. keen.example.com (no scheme, no path)');
+    const url = wsFromHost(host);
+    const spaceID = requirePick('space', 'KEEN_SPACE_ID', 'the space id');
+    const agentID = requirePick('agent', 'KEEN_AGENT', 'the agent slug');
+    const prompt = requirePick('prompt', 'KEEN_PROMPT', 'the user turn');
+    // Prefer ONE stable chat id (KEEN_CHAT_ID / --chat-id) reused across runs, so
+    // repeated runs CONTINUE one conversation instead of spawning a new chat thread
+    // every run (a fresh thread each time spams the user's chat list). Switch to a
+    // NEW id only when the agent goes erratic/incoherent — a fresh session resets
+    // the conversation context. When none is given we mint one and warn below.
+    const chatIdGiven = pick('chat-id', 'KEEN_CHAT_ID');
+    const chatId = chatIdGiven || `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+    // Auth is token-only — the access_token comes from a browser session where the
+    // consumer is already logged in; there is no login step here.
+    const accessToken = pick('token', 'KEEN_TOKEN').replace(/^Bearer\s+/i, '').trim();
+    if (!accessToken) {
+        fail(
+            [
+                'no consumer access_token — this is how you get one:',
+                '',
+                '  1. Open the CONSUMER app/site in your browser, logged in as the consumer that should run the flow.',
+                "  2. Copy the consumer access_token from that app's cookies (DevTools → Application → Cookies).",
+                '  3. Put it in .env as  KEEN_TOKEN=<token>   (or pass --token <token>).',
+                '  4. Also set  KEEN_USER_ID=<consumer id>  — the token seals its `sub`, so it cannot be derived.',
+                '',
+                'Then re-run.'
+            ].join('\n')
+        );
+    }
+
+    const claims = decodeJwt(accessToken);
+    const userId = pick('user-id', 'KEEN_USER_ID') || claims.sub || '';
+    const email = pick('email', 'KEEN_EMAIL') || claims.email || '';
+
+    if (!userId) {
+        emit.meta('warning: no userId (token seals its `sub`, no --user-id / KEEN_USER_ID) — the run may be rejected');
+    }
+
+    emit.meta(`connect ${url} · space=${spaceID} · agent=${agentID} · chat=${chatId}`);
+    if (!chatIdGiven) {
+        emit.meta(`fresh chat id minted — set KEEN_CHAT_ID=${chatId} (or --chat-id ${chatId}) to keep continuing THIS thread on the next run instead of spawning a new chat each time`);
+    }
+
+    // projectID defaults to the space id (space id === project id).
+    const chat = new ChatAPI({ url, spaceID, agentID, userId, email, projectID: spaceID, accessToken, cookies: parseCookies(process.argv.slice(2)) });
+
+    chat.onStream((event, data, requestId) => emit.stream(event, data, requestId));
+    chat.connect();
+
+    // Ctrl+C = STOP THE FLOW, not just kill the client: sendCancel tells the relay
+    // to wipe this cid's dict/session/agentState/queue on the engines, so a
+    // half-run leaves nothing behind. Second Ctrl+C hard-exits.
+    let cancelling = false;
+    process.on('SIGINT', () => {
+        if (cancelling) {
+            process.exit(130);
+        }
+        cancelling = true;
+        emit.meta('SIGINT — cancelling flow on the engine');
+        try {
+            chat.sendCancel();
+        } catch {
+            // best-effort — we exit regardless
+        }
+        chat.disconnect();
+        setTimeout(() => process.exit(130), 300);
+    });
+
+    let code = 0;
+
+    try {
+        // Gate the run on the relay's welcome (it assigns the connection cid the
+        // run must carry). Without this, TaskQueue mints a fallback cid the relay
+        // rejects as a mismatch. whenReady rejects if the socket dies first.
+        const cid = await Promise.race([
+            chat.whenReady(),
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error('welcome timeout (origin allow-listed? relay up?)')), 15_000))
+        ]);
+        emit.meta(`ready — cid ${cid}`);
+
+        const tree = await chat.runFlow({ chatId, prompt });
+        emit.meta(`run complete — ${tree.size} flow bundle(s)`);
+        for (const [flowId, bundle] of tree) {
+            emit.node(flowId, bundle);
+        }
+    } catch (err) {
+        code = 1;
+        emit.meta(`run FAILED: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+        chat.disconnect();
+    }
+
+    // Give the socket a beat to close, then exit deterministically.
+    setTimeout(() => process.exit(code), 200);
+}
+
+main().catch(err => fail(err instanceof Error ? err.message : String(err)));

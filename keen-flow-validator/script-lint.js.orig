@@ -1,0 +1,148 @@
+'use strict';
+
+/**
+ * script-lint.js — a light, dependency-free lint of a Keen `scripts/*.js` file for the
+ * runtime CONTRACTS that don't show up in the flow graph: the exec export, the import
+ * allow-list, and the agent-reply session contract (the "No tool response" class of bug).
+ *
+ * It is lexical (regex + balanced-bracket extraction), not a full AST — precise enough for
+ * these specific patterns with very low false-positive rate, and needs no parser dependency.
+ */
+
+/** The nine importable system resources. */
+const SYSTEM_MODULES = ['chat', 'log', 'session', 'tools', 'agent', 'cookies', 'http', 'settings', 'dictionary'];
+
+/** Strip line + block comments so patterns don't match inside comments (naive but effective). */
+function stripComments(src) {
+    return src
+        .replace(/\/\*[\s\S]*?\*\//g, m => m.replace(/[^\n]/g, ' '))
+        .replace(/(^|[^:])\/\/[^\n]*/g, (m, p1) => p1 + m.slice(p1.length).replace(/[^\n]/g, ' '));
+}
+
+/** From `open` index of an opening bracket, return the index just after its balanced close (or -1). */
+function matchBracket(src, open, openCh, closeCh) {
+    let depth = 0;
+    for (let i = open; i < src.length; i++) {
+        const c = src[i];
+        if (c === openCh) depth++;
+        else if (c === closeCh) { depth--; if (depth === 0) return i + 1; }
+        // skip strings/templates
+        else if (c === "'" || c === '"' || c === '`') { i = skipString(src, i, c); }
+    }
+    return -1;
+}
+function skipString(src, i, quote) {
+    for (let j = i + 1; j < src.length; j++) {
+        if (src[j] === '\\') { j++; continue; }
+        if (src[j] === quote) return j;
+    }
+    return src.length - 1;
+}
+
+/**
+ * Lint one script.
+ *   emit(level, msg) — level ∈ 'error' | 'warn' | 'info'
+ *   opts.isTool — true if this file is registered as a script tool (under tools/)
+ */
+function lintScript(source, emit, opts = {}) {
+    const src = stripComments(source);
+
+    // ── 1. exec export ────────────────────────────────────────────────────────
+    const hasExecDecl = /export\s+(async\s+)?(const|function)\s+exec\b/.test(src)
+        || /export\s*\{[^}]*\bexec\b[^}]*\}/.test(src);
+    if (!hasExecDecl) emit('error', 'no exported `exec` — a script must `export const exec = (props) => {…}` (named, not default)');
+    if (/export\s+default\b/.test(src) && !hasExecDecl)
+        emit('error', 'uses `export default` — the runner reads a NAMED `exec` export, not default');
+
+    // ── 2. imports allow-list ────────────────────────────────────────────────
+    const importRe = /import\s+(?:[\w*{}\s,]+\s+from\s+)?['"]([^'"]+)['"]/g;
+    let im;
+    while ((im = importRe.exec(src))) {
+        const spec = im[1];
+        if (spec === 'system/logs') { emit('error', `import '${spec}' — it is 'system/log' (singular)`); continue; }
+        if (spec.startsWith('system/')) {
+            const name = spec.slice('system/'.length);
+            if (!SYSTEM_MODULES.includes(name))
+                emit('error', `import '${spec}' — unknown system module (allowed: ${SYSTEM_MODULES.map(m => 'system/' + m).join(', ')})`);
+            continue;
+        }
+        if (spec.startsWith('./') || spec.startsWith('../')) continue; // own relative file — OK
+        emit('error', `import '${spec}' — only 'system/*' and relative './' '../' files are allowed (no npm packages, no absolute paths)`);
+    }
+
+    // ── 3. forbidden sandbox globals ─────────────────────────────────────────
+    if (/\bfetch\s*\(/.test(src)) emit('error', 'uses fetch() — the sandbox has no network; use `import Http from \'system/http\'`');
+    if (/\brequire\s*\(/.test(src)) emit('warn', 'uses require() — scripts are ES modules; use `import`');
+    if (/\bcrypto\s*\./.test(src)) emit('warn', 'uses crypto — the sandbox has no crypto; use `Tools.generateUUID()` from system/tools');
+
+    // ── 4. concurrent SAB reads (E_SAB_BUSY) ─────────────────────────────────
+    const paRe = /Promise\.all\s*\(/g;
+    let pa;
+    while ((pa = paRe.exec(src))) {
+        const open = src.indexOf('(', pa.index);
+        const end = open >= 0 ? matchBracket(src, open, '(', ')') : -1;
+        if (end > open) {
+            const inner = src.slice(open, end);
+            if (/\bHttp\s*\.\s*(get|getJson|post|postJson|request)\b/.test(inner) || /\bAgent\s*\.\s*(get|consume)\w*\b/.test(inner))
+                emit('warn', 'Promise.all over system/http or system/agent reads — they share one buffer (E_SAB_BUSY). await each read sequentially');
+        }
+    }
+
+    // ── 5. agent-reply session contract ──────────────────────────────────────
+    // Every setRootAgentPrompt / setAgentPrompt reply must be stamped with the caller's session.
+    const callRe = /\b(setRootAgentPrompt|setAgentPrompt)\s*\(/g;
+    let call;
+    let sawReply = false;
+    while ((call = callRe.exec(src))) {
+        sawReply = true;
+        const open = src.indexOf('(', call.index);
+        const end = open >= 0 ? matchBracket(src, open, '(', ')') : -1;
+        if (end <= open) continue;
+        const args = src.slice(open, end);
+
+        // find the payload object literal (the last {...} inside the arg list)
+        const objOpen = args.indexOf('{');
+        if (objOpen < 0) {
+            // payload might be an identifier (a helper var) — can't inspect; note it once
+            continue;
+        }
+        const objEnd = matchBracket(args, objOpen, '{', '}');
+        const payload = objEnd > objOpen ? args.slice(objOpen, objEnd) : args.slice(objOpen);
+
+        if (!/\bprompt\s*:/.test(payload) && !/\.\.\./.test(payload))
+            emit('warn', `${call[1]}(...) payload has no \`prompt\` — the reply carries no message`);
+
+        const hasSessionID = /\bsessionID\s*:/.test(payload);
+        const hasLowerSessionId = /\bsessionId\s*:/.test(payload);
+        if (hasLowerSessionId)
+            emit('error', `${call[1]}(...) payload uses \`sessionId:\` (lowercase) — the write key is \`sessionID\` (uppercase ID); a lowercase key is silently dropped`);
+        else if (!hasSessionID && !/\.\.\./.test(payload))
+            emit('error', `${call[1]}(...) reply has no \`sessionID\` — the agent resolves its trigger session-scoped, so an un-stamped reply is invisible → "No tool response". Stamp \`sessionID: toolOptions.agentNode.flowContext.sessionId\` (or the captured caller session)`);
+
+        if (/\brequestId\s*:/.test(payload) && !/\brequestID\s*:/.test(payload))
+            emit('warn', `${call[1]}(...) payload uses \`requestId:\` (lowercase) — the write key is \`requestID\` (uppercase ID)`);
+        else if (hasSessionID && !/\brequestID\s*:/.test(payload) && !/\.\.\./.test(payload))
+            emit('info', `${call[1]}(...) has no fresh \`requestID\` — recommended: \`requestID: Tools.generateUUID()\` (mirrors the engine's own recall)`);
+
+        // nuance: flowContext.sessionId for a TOOL reply is the tool's OWN session, not the caller's
+        if (/\bsessionID\s*:\s*flowContext\.sessionId\b/.test(payload) && opts.isTool)
+            emit('warn', `${call[1]}(...) stamps \`sessionID: flowContext.sessionId\` — for a script TOOL that is the tool's OWN session, not the caller's. Reply with \`toolOptions.agentNode.flowContext.sessionId\`. (flowContext.sessionId is correct only when SEEDING an inner agent in a flow tool.)`);
+    }
+
+    // ── 6. tool scripts should read the caller from toolOptions ───────────────
+    // (lenient: scripts commonly alias `const tc = toolOptions.toolContext`, so check for the
+    //  reference, not an exact dotted path.)
+    if (opts.isTool && sawReply) {
+        if (!/\btoolContext\b/.test(src))
+            emit('warn', 'script tool replies but never references `toolOptions.toolContext` — how does it get the caller (agentId / the `!*context`)?');
+        else if (!/\btoolContext\b[\s\S]*\bagentId\b/.test(src) && !/\bagentId\b[\s\S]*\btoolContext\b/.test(src) && !/\bagentId\b/.test(src))
+            emit('warn', 'script tool replies but never reads an `agentId` — which agent does it answer?');
+        if (!/agentNode\s*\.\s*flowContext\s*\.\s*sessionId/.test(src)
+            && !/flowContext\s*\.\s*sessionId/.test(src)
+            && !/dictionary\s*\.\s*\w*[Ss]ession/.test(src)
+            && !/\bsessionID\s*:/.test(src))
+            emit('warn', 'script tool replies but never reads a caller session (`toolOptions.agentNode.flowContext.sessionId` or a captured one) — replies may be un-stamped');
+    }
+}
+
+module.exports = { lintScript, SYSTEM_MODULES };

@@ -1,0 +1,16 @@
+{
+    "name": "agent-runner",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "description": "Headless Keen flow runner — a building agent runs a flow and reads the live onStream + the returned flow-tree from stdout.",
+    "scripts": {
+        "start": "tsx run.ts"
+    },
+    "dependencies": {
+        "dotenv": "^17.4.2",
+        "fflate": "^0.8.3",
+        "tsx": "^4.19.2",
+        "ws": "^8.18.0"
+    }
+}

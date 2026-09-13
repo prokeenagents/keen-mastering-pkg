@@ -1,0 +1,9 @@
+# per-project state written by /keen-start — holds secrets
+working_dir/*/
+working_dir/.draft.json
+!working_dir/README.md
+# the runner's live configuration (only the example ships)
+agent-runner/.env
+agent-runner/.env.*
+!agent-runner/.env.example
+node_modules/
