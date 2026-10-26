@@ -355,7 +355,8 @@ button is on the Webhooks landing page.
 **Create form** (card `Delivery Target`). `Name` (required, placeholder `Enter Webhook Name`),
 `Origin` (required, placeholder `https://partner.example.com` — matched **exactly**, `scheme://host[:port]`,
 no path, no trailing slash; the port matters), and `Webhook URL` (required, placeholder
-`https://partner.example.com/api/keen-webhook`). Created **unassigned** — an api key claims it from
+`https://partner.example.com/api/keen-webhook` — the reference site needs its secret appended:
+`…/api/keen-webhook/<KEEN_WEBHOOK_SECRET>`). Created **unassigned** — an api key claims it from
 the key's own form. Submit: `Create`.
 
 **Detail page** (card `Target & Binding`). A read-only `Api Key` binding panel (the key holding it, or

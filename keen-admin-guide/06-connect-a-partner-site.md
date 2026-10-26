@@ -42,8 +42,9 @@ Golden path). Then hand the partner exactly three things:
 | `KEEN_ORIGIN` | `<ngrok URL>` — exactly the Origin on the Webhook (a placeholder such as `https://pending.local` for the very first boot) |
 | `KEEN_CLIENT_ID` / `KEEN_CLIENT_SECRET` | the Client's id + secret |
 | `KEEN_API_KEY_ID` / `KEEN_API_KEY_SECRET` | the Api Key's id + secret |
+| `KEEN_WEBHOOK_SECRET` | a secret you generate (`openssl rand -hex 32`, at least 32 characters). It is the last segment of the Webhook URL — Keen does not sign its webhooks, so the site accepts a delivery only on `/api/keen-webhook/<this value>` and answers 401 to anything else. Rotate it here AND on the Webhook if it ever leaks. |
 
-The site **refuses to boot** unless the six values other than `KEEN_WS` are all filled (always set
+The site **refuses to boot** unless the seven values other than `KEEN_WS` are all filled (always set
 `KEEN_WS` too — without it the chat never connects), and it reads them **only when it starts** —
 after any `.env.local` change, stop it and start it again.
 Placeholders only in notes — never write a real secret anywhere else. Start it with
@@ -52,7 +53,7 @@ certificate, or `npm run dev` (`npm run dev:win`) when it has a trusted one — 
 servers; a production build is `npm run build` followed by `npm run start`. **The tunnel goes to the
 port the site reports** in its `Local: http://localhost:<port>` line — `ngrok http <port>`; 3000 only
 if 3000 was free (on a machine that also runs a local Keen stack's admin console on 3000, it's 3001).
-Its notification URL is `<ngrok URL>/api/keen-webhook`.
+Its notification URL is `<ngrok URL>/api/keen-webhook/<KEEN_WEBHOOK_SECRET>`.
 
 Finally, on the key's page: **Rebuild Resource Cache** (the api-key cascade, `07-caches.md`), then
 **Wake** to push the first configuration (`08-wake.md`) — Rebuild first, Wake second.
@@ -168,7 +169,7 @@ re-read.
 - **The tunnel URL lives in four places.** A new ngrok URL (a free tunnel gets one each time it
   restarts) means moving all four together:
   1. the **Webhook** record — both its **Origin** and its **Webhook URL**
-     (`<ngrok URL>/api/keen-webhook`), Api → Webhooks → the webhook → **Save**;
+     (`<ngrok URL>/api/keen-webhook/<KEEN_WEBHOOK_SECRET>` — same secret, new host), Api → Webhooks → the webhook → **Save**;
   2. the site's `KEEN_ORIGIN` — then **restart** the site (the restart also gets it a fresh
      application token);
   3. the agent-runner's `KEEN_ORIGIN`, if you use the runner (`../keen-mcp-guide/README.md`);

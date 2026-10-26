@@ -170,16 +170,18 @@ needs an **MCP account** — a human creates it under Organization → MCP Accou
      consumer's own Spaces board, `09-consumers.md`.)
 6. **Start the partner site, read its port, tunnel it** (the entanglement project) →
    `06-connect-a-partner-site.md`.
-   - **6.1** The site **refuses to boot** unless all six `KEEN_*` values are non-empty (`KEEN_HOST`,
+   - **6.1** The site **refuses to boot** unless all seven `KEEN_*` values are non-empty (`KEEN_HOST`,
      `KEEN_ORIGIN`, `KEEN_CLIENT_ID`, `KEEN_CLIENT_SECRET`, `KEEN_API_KEY_ID`,
-     `KEEN_API_KEY_SECRET`). So first **create the Api Key** now → `05-api-access.md`: Api → Api
+     `KEEN_API_KEY_SECRET`, `KEEN_WEBHOOK_SECRET` — at least 32 characters; generate it with
+     `openssl rand -hex 32`). So first **create the Api Key** now → `05-api-access.md`: Api → Api
      Keys → **Create**, a **Name** only (its bindings come in 8.1). Remember its **ID + Secret**
      (the key is shown once). Then make the site's `.env.local` (copy `.env.example` if it's
      missing) and fill: the host pair — LOCAL `KEEN_HOST=https://localhost` +
      `KEEN_WS=wss://localhost/ws-keen`, or SANDBOX `KEEN_HOST=https://<host>` +
      `KEEN_WS=wss://<host>/ws-keen` (e.g. `keen.example.com`); `KEEN_CLIENT_ID` /
      `KEEN_CLIENT_SECRET` (4); `KEEN_API_KEY_ID` / `KEEN_API_KEY_SECRET` (this step); and a
-     placeholder `KEEN_ORIGIN=https://pending.local` — step 9 replaces it.
+     placeholder `KEEN_ORIGIN=https://pending.local` — step 9 replaces it; and the generated
+     `KEEN_WEBHOOK_SECRET`.
    - **6.2** Start it: `npm run dev-local` (`npm run dev-local:win` on Windows) against a stack with
      a self-signed certificate (a local one), or `npm run dev` (`npm run dev:win`) against a host
      with a trusted certificate — both are dev servers; a production build is `npm run build` then
@@ -190,7 +192,9 @@ needs an **MCP account** — a human creates it under Organization → MCP Accou
    - **6.4** Tunnel **that** port: `ngrok http <port>`, and take the URL it prints
      (`https://<your-tunnel>.ngrok-free.app` — placeholder). This is the `<ngrok URL>` below.
 7. **Create the Webhook** → `05-api-access.md`: **Origin** = `<ngrok URL>`, **Webhook URL** =
-   `<ngrok URL>/api/keen-webhook`. Remember its **Webhook ID**.
+   `<ngrok URL>/api/keen-webhook/<KEEN_WEBHOOK_SECRET>` (Keen does not sign its webhooks, so the
+   site accepts a delivery only with its secret in the path; treat this URL as a secret).
+   Remember its **Webhook ID**.
 8. **The Api Key** — already created in 6.1.
    - **8.1** **Bind ALL the resources created so far** to it — the certificate (3), client (4),
      contract (5) and webhook (7): open the key (Api → Api Keys → the key), set the four pickers

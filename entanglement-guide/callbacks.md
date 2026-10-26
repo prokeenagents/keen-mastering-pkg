@@ -27,7 +27,7 @@ stream. This is where the model's answer actually arrives (NOT from `runFlow()`'
 return value, which is the flow‑tree snapshot for inspection).
 
 What the app does with it — the key rule is **`event === 'token'` is the streaming
-answer**, everything else is a status row:
+text**, everything else is a step or an error:
 
 ```tsx
 instance.onStream((event, data) => {
@@ -35,22 +35,40 @@ instance.onStream((event, data) => {
   if (!text) return;
 
   if (event === 'token') {
-    // Accumulate into ONE agent bubble: first token creates the bubble, the rest
-    // append to it (map over messages, replace the streaming row in place).
+    // Append to the CURRENT agent row (map over messages, replace it in place);
+    // the first token after a reset opens a new agent row.
     …
     return;
   }
 
+  // Any other event closes the current agent row: the next token opens a new one,
+  // so the rows keep the order things happened in.
+  agentMessageId.current = null;
+
   // thinking / processing / progress → an 'event' row; 'error' → an 'error' row.
   setMessages(prev => appendCapped(prev, {
-    id, role: event === 'error' ? 'error' : 'event', event, text
+    id, role: event === 'error' ? 'error' : 'event', event, text, at: Date.now()
   }));
 });
 ```
 
-So: **`token`** builds the answer bubble; **`thinking` / `processing` / `progress`**
-render as progress rows (so a long, multi‑step run reads as progress, not a frozen
-screen); **`error`** renders as an error row.
+The transcript then folds those rows into one **turn** per prompt
+(`chat-messages/turns.ts`):
+
+- **`thinking` / `processing` / `progress`** (and any other event name) become
+  steps of the turn's **run trace** — a collapsible timeline, open while the turn
+  runs (so a long, multi‑step run reads as progress, not a frozen screen), then
+  collapsed unless the reader turned **Steps** on.
+- **`token`** text is split around the `<SYSTEM CALL>…</SYSTEM CALL>` fences the
+  agent writes: each fence becomes a tool‑call step; prose **before the last tool
+  call** becomes a note step ("let me check that…"); prose **after the last tool
+  call** is **the answer**, rendered as markdown. A turn with no tool call shows all
+  its prose as the answer.
+- **`error`** renders as the turn's "Something went wrong" block.
+
+For a flow author: what the user reads first is the prose your agent emits after
+its last tool call. Narration before a tool call, and every progress event, sit in
+the trace — visible while the turn runs, folded away once it is done.
 
 > A WebSocket close (e.g. 1006) does **not** arrive here — it surfaces on
 > `onSystem`. `onStream` only carries frames the Keen server actually sent over an
@@ -79,8 +97,10 @@ instance.onSystem(text => { … });
 
 These are **diagnostics**, not chat content. Wire `onSystem` to a log/console for
 debugging connectivity; never render it as the agent's answer. In entanglement the
-chat UI doesn't surface it as a bubble at all — the connection state the user sees
-comes from `onStatus` instead.
+chat shell doesn't subscribe to it at all — the connection state the user sees
+comes from `onStatus` instead. The shell also never reconnects on its own: after a
+close the status stays `disconnected` and Send stays off until the page is
+reloaded.
 
 ---
 
@@ -94,7 +114,8 @@ instance.onStatus(status => setStatus(status));
 ```
 
 Fires synchronously on each socket transition. The chat UI drives everything off
-it: the prompt box shows the status text, and Send is gated on `connected`.
+it: the chat header and the prompt box show the status, and Send is gated on
+`connected`.
 (`'unauthorized'` is a reserved state for a future server‑side auth‑close.)
 
 ---
@@ -115,8 +136,11 @@ canonical Send‑button gate — pair it with `onStatus`:
 const canSend = status === 'connected' && !running && prompt.trim().length > 0;
 ```
 
-The shell also uses the `true` edge to reset the "current streaming bubble" ref so
-each turn starts its own agent bubble.
+The shell also uses the `true` edge to reset the "current agent row" ref so each
+turn starts its own agent row, and the chat page uses the `false` edge to re‑read
+the conversation list (a brand‑new chat appears in the sidebar once its first turn
+settles). While `running` is true the Send button is a **Stop** button
+(`cancel()`).
 
 ---
 
@@ -154,9 +178,9 @@ does not use it.
 
 | Callback | Fires on | Carries | Use it for |
 |----------|----------|---------|------------|
-| `onStream` | frames **without** an envelope | `(event, data, requestId)` | **the agent's answer** (`event==='token'`) + progress/error rows |
+| `onStream` | frames **without** an envelope | `(event, data, requestId)` | **the agent's text** (`event==='token'`) + the run‑trace steps / error block |
 | `onSystem` | socket‑level events | `text` | connectivity **diagnostics** (open/close/error/parse); WS close codes (e.g. 1006) |
 | `onStatus` | socket transitions | `ConnectStatus` | connection UI + the Send gate |
-| `onRunning` | run start / settle | `boolean` | the Send/Cancel gate; per‑turn bubble reset |
+| `onRunning` | run start / settle | `boolean` | the Send/Stop gate; per‑turn row reset; list refresh on settle |
 | `onWelcome` | once per connection | `{ correlationID }` | gate on the connection being ready |
 | `onResponse` | frames **with** an envelope | `(envelope, requestId)` | log/stats panels (advanced) |

@@ -58,13 +58,14 @@ secret anywhere but the partner's own config.
 4. **Get the partner's Origin.** For the reference partner site this is a tunnel to the port the
    site **actually** runs on — start the site, read the port from its `Local: http://localhost:<port>`
    line (3000 only if 3000 was free), then `ngrok http <port>` and take the URL it prints
-   (`https://<your-tunnel>.ngrok-free.app` — a placeholder). The site won't boot without all six of
-   its `KEEN_*` values, so the README's Golden path step **6** creates the Api Key first and boots it
+   (`https://<your-tunnel>.ngrok-free.app` — a placeholder). The site won't boot without all seven of
+   its `KEEN_*` values (`KEEN_WEBHOOK_SECRET` included), so the README's Golden path step **6** creates the Api Key first and boots it
    with a placeholder Origin. A real partner tells you its site's Origin instead.
 5. **Create the Webhook entry.** Api → Webhooks → **Create**. Three fields: **Name**; **Origin** —
    the partner's exact browser origin (`scheme://host[:port]` — the port matters; only 80/443 are
    omitted; no path, no trailing slash, no wildcards; for the tunnel: the ngrok URL); and **Webhook
-   URL** — the partner's notification URL (for the reference site: `<ngrok URL>/api/keen-webhook`).
+   URL** — the partner's notification URL (for the reference site: `<ngrok URL>/api/keen-webhook/<KEEN_WEBHOOK_SECRET>`
+   — the site's own secret in the path, because Keen does not sign its webhooks; treat the URL as a secret).
    Press **Create**. Remember the **Webhook ID**.
 6. **Create the Api Key and bind all four.** Api → Api Keys → **Create**. Give it a **Name**, then use
    the four pickers — **Pick a webhook**, **Pick a client**, **Pick a certificate**, **Pick a

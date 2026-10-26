@@ -105,7 +105,7 @@ Follow this order exactly. After every reply, **remember the values marked ⟶**
  5.1 Assign the space from step 1 to it — `assign_contract_spaces { id, spaceIds: [spaceId] }` — and set the **outside-consumer settings**: `update_consumer_contract_policy { id, outsideRegistration, otpInsideRegistration, otpOutsideRegistration, blockOutsideRegistrationLogins, blockSystemRegistrationLogins }` (all five booleans every call — a partial call is rejected) and `assign_contract_default_outside_spaces { id, spaceIds: [spaceId] }` (the spaces an outside consumer gets by default).
 
 **6. Start the entanglement project, find its port, tunnel it** — in the project path from step 0:
- 6.1 The site **refuses to boot** unless all six `KEEN_*` values are non-empty (`KEEN_HOST`, `KEEN_ORIGIN`, `KEEN_CLIENT_ID`, `KEEN_CLIENT_SECRET`, `KEEN_API_KEY_ID`, `KEEN_API_KEY_SECRET` — it throws `Keen config missing from the environment` at startup). So before starting it: make sure `.env.local` exists (copy `.env.example` if not), put in the host block for the environment (section 1), the client id + secret from step 4, and **create the api key now** — `create_api_key { name }` ⟶ its **ID** + **Secret** (shown once) — and put those in too (its bindings come in step 8.1). For `KEEN_ORIGIN` use a placeholder for this first boot (e.g. `https://pending.local`); step 9 replaces it with the real ngrok URL and restarts.
+ 6.1 The site **refuses to boot** unless all seven `KEEN_*` values are non-empty (`KEEN_HOST`, `KEEN_ORIGIN`, `KEEN_CLIENT_ID`, `KEEN_CLIENT_SECRET`, `KEEN_API_KEY_ID`, `KEEN_API_KEY_SECRET`, `KEEN_WEBHOOK_SECRET` — it throws `Keen config missing from the environment` at startup) and `KEEN_WEBHOOK_SECRET` has at least 32 characters. Generate that secret once: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` (64 hex characters; `openssl rand -hex 32` works too). Keen does not sign its webhooks, so the site accepts a delivery only on `/api/keen-webhook/<KEEN_WEBHOOK_SECRET>` (step 7) — anything else gets 401. So before starting it: make sure `.env.local` exists (copy `.env.example` if not), put in the host block for the environment (section 1), the client id + secret from step 4, and **create the api key now** — `create_api_key { name }` ⟶ its **ID** + **Secret** (shown once) — and put those in too (its bindings come in step 8.1). For `KEEN_ORIGIN` use a placeholder for this first boot (e.g. `https://pending.local`); step 9 replaces it with the real ngrok URL and restarts.
  6.2 Start it with the command for the environment: LOCAL → `npm run dev-local` (Windows: `npm run dev-local:win`); SANDBOX → `npm run dev` (Windows: `npm run dev:win`).
  6.3 **Read the port from its output** (`Local: http://localhost:<port>` — Next takes 3000, or the next free port if 3000 is busy). Do not assume 3000.
  6.4 Tunnel **that** port — `ngrok http <port>` — and take the public URL it prints (`https://<xxxx>.ngrok-free.app`). ⟶ remember it as `<ngrok>`. (If you cannot run processes yourself, give the human these exact commands and ask for the port and the URL.)
@@ -113,7 +113,7 @@ Follow this order exactly. After every reply, **remember the values marked ⟶**
 **7. Create the Webhook** — `create_webhook { name, origin, webhook }` with
  - `name`    = a label (unique, up to 100 characters)
  - `origin`  = `<ngrok>` (the exact `scheme://host` — this is what the partner site / runner will present; anything else is silently dropped)
- - `webhook` = `<ngrok>/api/keen-webhook`
+ - `webhook` = `<ngrok>/api/keen-webhook/<KEEN_WEBHOOK_SECRET>` (the secret from 6.1 — this URL is itself a secret: never echo it, and mask it when a tool reply repeats it)
  ⟶ the **webhook ID**.
  Where the allow-list lives: there is no origin on the api key itself. The platform lets in exactly the `origin`s of the webhook records bound to **fully-bound** api keys (all four bindings), read from the served `api_keys` cache — so this origin is accepted only once step 8.1 binds the record, and a later `update_webhook` reaches the allow-list only through `rebuild_api_key_cache`.
 
@@ -138,6 +138,7 @@ KEEN_CLIENT_ID=<client id, step 4>
 KEEN_CLIENT_SECRET=<client secret, step 4>
 KEEN_API_KEY_ID=<api key id, step 8>
 KEEN_API_KEY_SECRET=<api key secret, step 8>
+KEEN_WEBHOOK_SECRET=<the secret from 6.1, ≥ 32 chars — the same value as in the webhook URL>
 ```
 
  Then **restart** it (stop the process from step 6.2 and start it again with the same command) — the Keen connector reads its configuration when it is constructed, so a running site never picks up new `.env.local` values without a restart. Keep the ngrok tunnel running; the site behind it is unchanged.

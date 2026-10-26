@@ -189,19 +189,21 @@ useEffect(() => {
 
   // Born HERE, never in render (render would mint one per re-render, and
   // connect() has no WebSocket during SSR).
-  const instance = new ChatAPI({
-    spaceID,
-    agentID: agentSlugID,   // the SLUG
-    userId: userID,
-    email,
-    accessToken,
-    url: consumer.wsUrl
-  });
+  const instance: App.ChatUI.Client = consumer.demo
+    ? new DemoChatClient(agentSlugID)     // demo mode: an in-memory agent, same surface
+    : new ChatAPI({
+        spaceID,
+        agentID: agentSlugID,   // the SLUG
+        userId: userID,
+        email,
+        accessToken,
+        url: consumer.wsUrl
+      });
 
   // Register callbacks BEFORE connect() so no early frame is missed.
   instance.onStatus(next => setStatus(next));
   instance.onRunning(next => { setRunning(next); if (next) agentMessageId.current = null; });
-  instance.onStream((event, data) => { /* accumulate tokens into the bubble */ });
+  instance.onStream((event, data) => { /* tokens → the current agent row; events → rows */ });
 
   chatRef.current = instance;
   instance.connect();
@@ -213,8 +215,15 @@ useEffect(() => {
     setRunning(false);
   };
   // accessToken is deliberately NOT a dependency — see §4.
-}, [chatID, spaceID, agentSlugID, userID, email]);
+}, [chatID, spaceID, agentSlugID, userID, email, consumer.demo]);
 ```
+
+The ref is typed as `App.ChatUI.Client` — the slice of the SDK the UI drives
+(`onStatus` / `onRunning` / `onStream`, `connect` / `disconnect`,
+`setAccessToken`, `runFlow`, `cancel`). `ChatAPI` satisfies it structurally; with
+`ENTANGLEMENT_DEMO=1` in dev the shell swaps in `DemoChatClient` (`src/demo/`), an
+in‑memory agent that streams thinking steps, a tool call and a markdown answer
+without any Keen server.
 
 Why each rule:
 
@@ -238,15 +247,15 @@ await instance.runFlow({ chatId: chatID, prompt: trimmed });
 `projectId`, `agentId` all default to the constructor values and can be overridden
 per call via `RunFlowInput`.
 
-The shell wraps this in `send`, appending the user's bubble first and handling the
+The shell wraps this in `send`, appending the user's row first and handling the
 outcome:
 
 ```ts
 try {
   await instance.runFlow({ chatId: chatID, prompt: trimmed });
 } catch (err) {
-  if (err.message === 'TaskQueue cancelled') { /* quiet "Canceled." row */ }
-  else                                       { /* red error row */ }
+  if (err.message === 'TaskQueue cancelled') { /* quiet 'canceled' row → "Stopped" */ }
+  else                                       { /* 'error' row → "Something went wrong" */ }
 }
 ```
 
@@ -297,18 +306,20 @@ proactively — the `logout` event handler only fires on an org webhook.
 that ran. That is for **inspection** (visualising the tree, per‑node responses),
 **not** the agent's answer.
 
-**The agent's answer arrives via `onStream`.** Token events accumulate into one
-chat bubble; other events (thinking / processing / progress) are shown as their own
-status rows. See [`callbacks.md`](callbacks.md) for the full split — it's the one
-thing most worth internalising: the text a user reads does not come out of the
-`await`.
+**The agent's answer arrives via `onStream`.** Token events accumulate into the
+current agent row; any other event (thinking / processing / progress / error) is
+its own row and closes the current agent row, so the next token opens a new one.
+The transcript then folds the rows into a turn: events and tool calls into a
+collapsible run trace, the prose after the last tool call into the answer. See
+[`callbacks.md`](callbacks.md) for the full split — it's the one thing most worth
+internalising: the text a user reads does not come out of the `await`.
 
 ```tsx
 // The answer is HERE, not from the runFlow() return value.
 instance.onStream((event, data) => {
   const text = streamText(data);
-  if (event === 'token') { /* append to the current agent bubble */ }
-  else                   { /* a status / error row */ }
+  if (event === 'token') { /* append to the current agent row */ }
+  else                   { /* close that row; add an event / error row */ }
 });
 ```
 

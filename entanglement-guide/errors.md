@@ -3,7 +3,7 @@
 The failures an integrator or a flow‑building agent will actually meet, in three
 groups: the **`E….` status codes** the Keen server puts in reply envelopes, the
 **SDK‑level failures** the client raises itself, and the **transport‑level**
-signals (WebSocket close codes, HTTP 401).
+signals (WebSocket close codes, and the HTTP refusals of the site's own routes).
 
 ---
 
@@ -87,16 +87,21 @@ after 10 tries with `max response retries exceeded for node …`.
 
 `TaskQueue` throws `new Error(envelope.message ?? envelope.code)` on a terminal
 error (and on any failed reply to the initial run frame), and `ChatShell.send`
-catches it into a red error bubble:
+catches it into an `error` row:
 
 ```tsx
 catch (err) {
-  if (err.message === 'TaskQueue cancelled') { /* quiet "Canceled." row */ }
-  else                                       { /* red error bubble: err.message */ }
+  if (err.message === 'TaskQueue cancelled') { /* quiet 'canceled' row → "Stopped" */ }
+  else                                       { /* 'error' row: err.message */ }
 }
 ```
 
-So the user sees the server's `message` text (or the code if there was no message).
+The transcript renders an `error` row as a red **"Something went wrong"** block
+under that turn, with the server's `message` text (or the code if there was no
+message) and a **Try again** button that sends the same prompt again. A
+stream event named `error` (an `onStream` frame, not a rejection) lands in the
+same block. A turn persisted with `responseType: 'error'` comes back from history
+as the same block.
 
 ---
 
@@ -128,13 +133,16 @@ A user cancel unwinds `runFlow()` by **rejecting with the message
 
 ```tsx
 if (message === 'TaskQueue cancelled') {
-  setMessages(prev => appendCapped(prev, { id, role: 'event', event: 'canceled', text: 'Canceled.' }));
-  return;   // a quiet "Canceled." row, never a red error
+  setMessages(prev => appendCapped(prev, { id, role: 'event', event: 'canceled', text: 'Canceled.', at: Date.now() }));
+  return;   // a quiet 'canceled' row, never an error
 }
 ```
 
-A cancel also fires one cancel signal to the Keen server (wiping the run's state for
-this connection) and clears local bundle state.
+The transcript turns that row into a small **"Stopped"** marker under the turn
+(whatever the agent had already said stays). A cancel also fires one cancel signal
+to the Keen server (wiping the run's state for this connection) and clears local
+bundle state. A turn cancelled in an earlier session comes back from history with
+the engine's `:: Canceled ::` marker and is shown the same way.
 
 ### `waitFor` timeout — a reply never came
 
@@ -161,8 +169,10 @@ throws it. (Continuations retry infinitely, so they don't hit this.)
 A WS close shows up on **`onSystem`** as `close (code <n>)` — never on `onStream`.
 
 - **1006 — abnormal closure.** Most often the page's **Origin is not in Keen's
-  allow‑list** — the `origin` of a webhook record bound to an api_key, matched
-  exactly (the server drops the upgrade) — or the WS URL / network is wrong. On a
+  allow‑list** — the `origin` of the webhook record bound to a **fully‑bound**
+  api_key (client, certificate, consumer contract and webhook record all bound),
+  matched exactly (the server drops the upgrade) — or the WS URL / network is
+  wrong. On a
   dev deployment it also happens when a `wss://` endpoint's certificate hasn't been
   accepted by the browser yet, and when a `ws://` URL lands on Keen's port 80, which
   only redirects to https (a WebSocket upgrade never follows a redirect — this is
@@ -182,17 +192,43 @@ A WS close shows up on **`onSystem`** as `close (code <n>)` — never on `onStre
 
 ---
 
-## 4. HTTP 401 (the `app/api/*` chat / consumer routes)
+## 4. HTTP refusals from the site's own routes (`app/api/*`)
 
 The chat‑management and profile calls (`/api/chat/list`, `/api/chat/history`,
-`/api/consumer/profile`, …) are ordinary HTTP through this app's server routes. A
-**401** there means the session token expired / is invalid → **refresh or
-re‑login**. In practice the history/list reads narrow on the envelope's `success`
-flag and simply show empty (a brand‑new chat legitimately has no history), while an
-expired access token is recovered by the refresh path (`/api/refresh`). When that
-fails too, nothing signs the user out on the spot: the events loop stops polling on
-401 and the next navigation bounces to `/login` through the proxy (the
-forced‑logout event handler fires only on an org webhook).
+`/api/consumer/profile`, …) are ordinary HTTP through this app's server routes,
+and the proxy in front of them answers some refusals itself, always as the same
+`{ success: false, status, message }` envelope a handler returns
+([`architecture.md`](architecture.md) §4). A failed Keen reply is never passed on
+raw: the browser gets Keen's message only when it is a short plain sentence, else
+the route's own fallback text.
+
+- **401** — the session token expired / is invalid → **refresh or re‑login**. The
+  proxy answers `Session expired. Please sign in again.` for any authenticated
+  route (chat, consumer, events, front settings, dictation) when the access token
+  no longer verifies. In practice the history/list reads narrow on the envelope's
+  `success` flag and simply show empty (a brand‑new chat legitimately has no
+  history), while an expired access token is recovered by the refresh path
+  (`/api/refresh`). When that fails too, nothing signs the user out on the spot:
+  the events loop stops polling on 401 and the next navigation bounces to `/login`
+  through the proxy (the forced‑logout event handler fires only on an org webhook).
+- **403 `Cross-site request refused.`** — a state‑changing call whose `Origin`
+  host is neither `KEEN_ORIGIN`'s nor the requested host. Seen when a page served
+  from one host posts to the site under another; serve the pages from the site's
+  own origin.
+- **429 `Too many attempts…`** with `Retry-After` — the per‑IP rate limit on login,
+  OTP, registration, the password legs, refresh and Keen's inbound routes. Users
+  behind one NAT share a bucket, and so do all callers when `TRUSTED_PROXY_HOPS`
+  doesn't match the proxies in front (see [`README.md`](README.md)). A refused
+  `/api/refresh` looks like a failed refresh to the chat: the next send meets
+  `E3002`.
+- **503 `Keen connection is not ready.`** — a signed‑in call while the connector
+  is still booting after the 10 s hold, or after the certificate / contract was
+  removed org‑side.
+- **503 from `/api/speech-to-text`** — dictation isn't configured
+  (`ELEVENLABS_API_KEY` unset); the composer shows the message under the mic.
+- **401 on `/api/keen-webhook/<secret>`** — Keen's delivery carried the wrong
+  secret: the record's `webhook` URL and `KEEN_WEBHOOK_SECRET` disagree. Keen's
+  delivery log shows the status; the certificate never arrives.
 
 ---
 
@@ -207,7 +243,11 @@ forced‑logout event handler fires only on an org webhook).
 | `E4…` mid‑run | backpressure on a per‑node call | none — SDK retries (10× on an `initial` node, forever on a continuation) |
 | a run that never finishes; `E6002` once a second | the run's server‑side state is gone and never comes back | cancel, then send the turn again |
 | `runFlow` rejects, "…over the …MB limit" (`FatalSendError`) | frame > 8 MB | shrink the payload (dictionary/session/script result/prompt) |
-| `runFlow` rejects, "TaskQueue cancelled" | user cancelled | expected — render a quiet "Canceled." row |
-| `onSystem` "close (code 1006)" | origin not allow‑listed (the webhook record's `origin`) / wrong WS URL or scheme / unset `KEEN_WS` | fix the record's origin / URL / ws‑vs‑wss |
+| `runFlow` rejects, "TaskQueue cancelled" | user cancelled | expected — the app shows a quiet "Stopped" marker |
+| `onSystem` "close (code 1006)" | origin not allow‑listed (the `origin` of the record bound to a fully‑bound api_key) / wrong WS URL or scheme / unset `KEEN_WS` | fix the record's origin / URL / ws‑vs‑wss |
 | `onSystem` "close (code 1009)" | a frame above the relay's own `ws` cap (default 100 MiB) | shrink the payload; an 8 MB–100 MiB frame fails as `E7…` instead (see §3) |
 | HTTP 401 on `/api/chat/*` or `/api/consumer/*` | session expired | refresh or re‑login |
+| HTTP 403 "Cross-site request refused." | a write posted from another host | serve the pages from the site's own origin |
+| HTTP 429 "Too many attempts…" | per‑IP rate limit | wait `Retry-After` seconds |
+| HTTP 503 "Keen connection is not ready." | connector booting / certificate or contract removed | wait for the boot; after a removal, WAKE |
+| site stuck on `/maintenance`, Keen's log shows the webhook answered 401 / 404 | wrong secret in the record's `webhook` URL / the bare `/api/keen-webhook` path | register `<site>/api/keen-webhook/<KEEN_WEBHOOK_SECRET>` |
