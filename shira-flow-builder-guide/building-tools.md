@@ -380,7 +380,7 @@ outer agent always gets a clean answer instead of a silent "No tool response":
   Even with internal try/catch, an unexpected throw ends the branch → M gets "No tool response" with no
   explanation.
 - `returnFailure` reads M's identity from the dict (`dictionary.mainAgentId` / `dictionary.mainSession`,
-  captured at node 1) and pushes a clean failure to M. (See "Wire the failure paths" above.)
+  captured at node 1) and pushes a clean failure to M. (See "Wire the failure paths" below.)
 
 ### ⚠️ Watch out for (nested tools) — quick list
 
@@ -392,7 +392,8 @@ outer agent always gets a clean answer instead of a silent "No tool response":
   session, not M's.
 - **Return to M** with `sessionID: dictionary.mainSession` (M's session) — or M reports "No tool response".
 - **Distinct agentIds + a System prompt per agent** (see above).
-- **Wire the inner Agent's Fallback and every Script's Error** to a `returnFailure` step (see above).
+- **Wire the inner Agent's Fallback and every Script's Error** to a `returnFailure` step (see above, and
+  "Wire the failure paths" below).
 
 ---
 
@@ -403,11 +404,10 @@ never dead-end and never let an error masquerade as a real answer. The two edges
 easy to forget:
 
 - **The inner Agent node's Fallback (`error`)** — fires on a provider failure (rate-limit, timeout,
-  auth, 4xx/5xx). (A configuration or parse error — missing llm/agentId, unknown model, no user message —
-  is different: it fails the node with E6101/E6002 and takes **neither** edge.) **If you leave it unwired,
-  the flow continues on `next_1` with the error text recorded as the agent's "answer"** — and your return
-  step will forward that error string as
-  if it were a real result (a *garbled success*). Wire **Fallback → a small return-failure Script** that
+  auth, 4xx/5xx), and also on a configuration or payload error caught before the call — missing
+  llm/agentId, unknown model (`E6101`), no user message (`E6002`). **If you leave it unwired, the flow
+  continues on `next_1` with the error text as the agent's "answer"** — and your return step will forward
+  that error string as if it were a real result (a *garbled success*). Wire **Fallback → a small return-failure Script** that
   pushes a clean `{ ok:false, error:"the assistant failed" }` to the calling agent (with the caller's
   `sessionID`, from the dict — same as the normal return).
 - **Each Script node's Error (`error`)** — fires when the script throws. Even if your scripts try/catch

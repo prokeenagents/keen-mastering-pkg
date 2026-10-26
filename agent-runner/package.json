@@ -4,6 +4,9 @@
     "private": true,
     "type": "module",
     "description": "Headless Keen flow runner — a building agent runs a flow and reads the live onStream + the returned flow-tree from stdout.",
+    "engines": {
+        "node": ">=20"
+    },
     "scripts": {
         "start": "tsx run.ts"
     },

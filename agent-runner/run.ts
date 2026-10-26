@@ -18,24 +18,42 @@
  */
 import 'dotenv/config';
 
+import { format } from 'node:util';
+
 import { WebSocket } from 'ws';
 
 import ChatAPI from './sdk/index';
 
 /**
+ * stdout carries ONLY this runner's own lines (NDJSON with --json) — the SDK is
+ * the browser Chat SDK and may console.log progress (e.g. parallelContext
+ * batches), which would put a non-JSON line into the stream. Route console.log
+ * to stderr before anything else runs.
+ */
+console.log = (...parts: unknown[]): void => {
+    process.stderr.write(format(...parts) + '\n');
+};
+
+/** The last transport error the socket raised ('Unexpected server response: 502', ECONNREFUSED, a TLS error …). */
+let lastSocketError = '';
+
+/**
  * The SDK calls `new WebSocket(url)` (the browser global). Provide it in Node,
- * optionally stamping an Origin header — the Keen server silently drops a
- * connection whose Origin is not allow-listed (a browser sends its page origin;
- * a Node client sends none, so pass --origin <allowed>).
+ * optionally stamping an Origin header — the Keen relay refuses the upgrade of
+ * a connection whose Origin is not allow-listed (the origins of the webhook
+ * records bound to api_keys; a browser sends its page origin, a Node client
+ * sends none, so pass --origin <allowed>). The SDK's onerror sees
+ * no detail, so the subclass also keeps the real error for the failure message.
  */
 function installWebSocket(origin?: string): void {
-    const Impl = origin
-        ? class extends WebSocket {
-              constructor(address: string, protocols?: string | string[]) {
-                  super(address, protocols, { origin });
-              }
-          }
-        : WebSocket;
+    class Impl extends WebSocket {
+        constructor(address: string, protocols?: string | string[]) {
+            super(address, protocols, origin ? { origin } : {});
+            this.on('error', (err: Error) => {
+                lastSocketError = err.message;
+            });
+        }
+    }
 
     (globalThis as unknown as { WebSocket: typeof WebSocket }).WebSocket = Impl;
 }
@@ -51,6 +69,14 @@ function parseArgs(argv: string[]): Args {
         const token = argv[i];
 
         if (!token.startsWith('--')) {
+            continue;
+        }
+
+        const eq = token.indexOf('=');
+
+        // --key=value (the form keen-validate / keen-deploy also accept)
+        if (eq > 2) {
+            args[token.slice(2, eq)] = token.slice(eq + 1);
             continue;
         }
 
@@ -102,20 +128,12 @@ function parseCookies(argv: string[]): Record<string, string> | undefined {
         if (argv[i] === '--cookie' && argv[i + 1] !== undefined) {
             add(argv[i + 1]);
             i++;
+        } else if (argv[i].startsWith('--cookie=')) {
+            add(argv[i].slice('--cookie='.length));
         }
     }
 
     return Object.keys(out).length > 0 ? out : undefined;
-}
-
-function need(args: Args, key: string): string {
-    const value = args[key];
-
-    if (typeof value !== 'string' || value.length === 0) {
-        fail(`missing required --${key}`);
-    }
-
-    return value as string;
 }
 
 function fail(message: string): never {
@@ -156,28 +174,67 @@ function wsFromHost(host: string): string {
 
 // ----------------------------------------------------------------- emit
 
+/** Credential keys never printed: the SDK re-stamps the live access_token on every bundle's userContext. */
+const SECRET_KEYS = new Set(['accessToken', 'refreshToken', 'access_token', 'refresh_token']);
+
+/** A deep copy with every credential value replaced — what reaches stdout. */
+function redact(value: unknown): unknown {
+    if (Array.isArray(value)) {
+        return value.map(redact);
+    }
+    if (value && typeof value === 'object') {
+        const out: Record<string, unknown> = {};
+        for (const [key, inner] of Object.entries(value)) {
+            out[key] = SECRET_KEYS.has(key) && inner ? '<redacted>' : redact(inner);
+        }
+        return out;
+    }
+    return value;
+}
+
+type Bundle = {
+    flowTask?: { flowContext?: { flowId?: string } };
+    nodeTasks?: Array<{ nodeContext?: { kind?: string; id?: string }; response?: { success?: boolean; data?: { final?: unknown } } }>;
+};
+
+/** Whether the flow reached an End node — its reply is `{ final: true }`. A flow also completes when an unwired output ends it. */
+function endReached(bundle: Bundle): boolean {
+    return (bundle.nodeTasks ?? []).some(n => n.response?.success === true && n.response.data?.final === true);
+}
+
 function makeEmitter(json: boolean) {
     return {
         stream(event: string, data: unknown, rid?: string): void {
+            const safe = redact(data);
             if (json) {
-                process.stdout.write(JSON.stringify({ t: 'stream', event, rid, data }) + '\n');
+                process.stdout.write(JSON.stringify({ t: 'stream', event, rid, data: safe }) + '\n');
             } else {
-                const text = typeof data === 'string' ? data : JSON.stringify(data);
+                const text = typeof safe === 'string' ? safe : JSON.stringify(safe);
                 process.stdout.write(`  ┃ ${event}${rid ? ` (${rid.slice(0, 8)})` : ''}: ${text}\n`);
             }
         },
-        node(flowId: string, bundle: unknown): void {
-            const b = bundle as { flowTask?: { flowContext?: { correlationId?: string } }; nodeTasks?: Array<Record<string, unknown>> };
+        node(key: string, bundle: Bundle): void {
+            const reached = endReached(bundle);
             if (json) {
-                process.stdout.write(JSON.stringify({ t: 'flow', flowId, flowTask: b.flowTask, nodeTasks: b.nodeTasks }) + '\n');
+                process.stdout.write(JSON.stringify({ t: 'flow', flowId: key, endReached: reached, flowTask: redact(bundle.flowTask), nodeTasks: redact(bundle.nodeTasks) }) + '\n');
             } else {
-                process.stdout.write(`\n▸ flow ${flowId.slice(0, 12)} — ${b.nodeTasks?.length ?? 0} node(s)\n`);
-                for (const n of b.nodeTasks ?? []) {
-                    const nc = (n.nodeContext as { kind?: string; id?: string }) ?? {};
-                    const resp = n.response ?? null;
-                    const shape = resp ? JSON.stringify(resp) : 'no response';
-                    process.stdout.write(`    • ${nc.kind ?? '?'} ${(nc.id ?? '').slice(0, 8)} → ${shape.slice(0, 500)}\n`);
+                // The bundle key starts with the shared cid — print the flow's own id instead.
+                const flowId = bundle.flowTask?.flowContext?.flowId ?? key;
+                process.stdout.write(`\n▸ flow ${flowId} — ${bundle.nodeTasks?.length ?? 0} node(s)${reached ? '' : ' — no End node reached'}\n`);
+                for (const n of bundle.nodeTasks ?? []) {
+                    const nc = n.nodeContext ?? {};
+                    const shape = n.response ? JSON.stringify(redact(n.response)) : 'no response';
+                    process.stdout.write(`    • ${nc.kind ?? '?'} ${nc.id ?? ''} → ${shape.slice(0, 500)}\n`);
                 }
+            }
+        },
+        summary(ok: boolean, tree: ReadonlyMap<string, Bundle>, error?: string): void {
+            const flows = tree.size;
+            const reached = [...tree.values()].filter(endReached).length;
+            if (json) {
+                process.stdout.write(JSON.stringify({ t: 'summary', ok, flows, endReached: reached, ...(error ? { error } : {}) }) + '\n');
+            } else {
+                process.stderr.write(`agent-runner: ${ok ? 'OK' : 'FAILED'} — ${flows} flow bundle(s), ${reached} reached an End node${error ? ` — ${error}` : ''}\n`);
             }
         },
         meta(line: string): void {
@@ -206,9 +263,10 @@ CONFIG (flag first, then .env in the working dir)
   --token    / KEEN_TOKEN       a consumer access_token (required; token-only auth)
   --user-id  / KEEN_USER_ID     the consumer id — relay enforces userId === the token's sealed sub
   --email    / KEEN_EMAIL       identity email (presence-checked; defaults to the token's email claim)
-  --origin   / KEEN_ORIGIN      Origin header — must be allow-listed, else the server drops the socket
-  --prompt                      the user turn (required, per-run)
-  --chat-id                     reuse a chat id to continue a conversation (default: a fresh one)
+  --origin   / KEEN_ORIGIN      Origin header — must equal the origin on the webhook record bound to the
+                                api_key (the relay's allow-list), else the upgrade is refused
+  --prompt   / KEEN_PROMPT      the user turn (required, per-run; the env var is only a fallback)
+  --chat-id  / KEEN_CHAT_ID     reuse a chat id to continue a conversation (default: a fresh one)
   --cookie name=value           a cookie the flow's script nodes should see, read via
                                 system/cookies (repeatable). Also KEEN_COOKIES="a=1;b=2"
                                 in .env. Node has no browser, so you pass the value here —
@@ -216,7 +274,20 @@ CONFIG (flag first, then .env in the working dir)
   --json                        NDJSON output (one object per frame) for the agent
   -h --help                     this help
 
-projectID defaults to KEEN_SPACE_ID (space id === project id).
+Flags take --key value or --key=value. projectID defaults to KEEN_SPACE_ID (space id === project id).
+
+OUTPUT
+  stdout carries only the runner's lines (NDJSON with --json); credentials in the
+  tree are printed as <redacted>. The last line is the summary:
+    {"t":"summary","ok":true,"flows":2,"endReached":2}
+  A flow can also complete WITHOUT an End node (an unwired output ends it) — each
+  "flow" line says endReached true/false. On a failure the partial tree is printed
+  before the summary.
+
+EXIT CODES
+  0  the run settled (check the summary's endReached)
+  1  the run failed (socket closed, auth / input error, retries exhausted, cancel)
+  2  bad arguments / configuration
 
 For a self-signed dev cert, prefix the command with NODE_TLS_REJECT_UNAUTHORIZED=0.
 Full docs: agent-runner/README.md · agent-runner/docs/USAGE.md
@@ -273,12 +344,18 @@ async function main(): Promise<void> {
             [
                 'no consumer access_token — this is how you get one:',
                 '',
-                '  1. Open the CONSUMER app/site in your browser, logged in as the consumer that should run the flow.',
-                "  2. Copy the consumer access_token from that app's cookies (DevTools → Application → Cookies).",
-                '  3. Put it in .env as  KEEN_TOKEN=<token>   (or pass --token <token>).',
-                '  4. Also set  KEEN_USER_ID=<consumer id>  — the token seals its `sub`, so it cannot be derived.',
+                '  Headless (preferred for an agent) — the Keen MCP server:',
+                '    1. As an MCP account, create an MCP consumer (create_mcp_consumer → its id + secret).',
+                '    2. Call get_mcp_consumer_token with that id + secret → the access_token.',
+                '    3. Put it in .env as  KEEN_TOKEN=<token>  and the consumer id as  KEEN_USER_ID=<id>.',
+                '    (../keen-mcp-guide/README.md walks through it.)',
                 '',
-                'Then re-run.'
+                '  A human consumer instead:',
+                "    1. Open the CONSUMER app/site in your browser, logged in as that consumer, and copy the",
+                "       access_token from its cookies (DevTools → Application → Cookies).",
+                '    2. Set  KEEN_TOKEN=<token>  and  KEEN_USER_ID=<consumer id>.',
+                '',
+                'The token seals its `sub`, so KEEN_USER_ID cannot be derived. Then re-run.'
             ].join('\n')
         );
     }
@@ -321,26 +398,64 @@ async function main(): Promise<void> {
         setTimeout(() => process.exit(130), 300);
     });
 
+    // The TaskQueue clears its map before a failed run throws — keep the last
+    // non-empty view so the failure still shows how far the flow got.
+    let partial: ReadonlyMap<string, Bundle> = new Map();
+    chat.taskQueue.onUpdate(bundles => {
+        if (bundles.size > 0) {
+            partial = new Map(bundles);
+        }
+    });
+
     let code = 0;
 
     try {
         // Gate the run on the relay's welcome (it assigns the connection cid the
         // run must carry). Without this, TaskQueue mints a fallback cid the relay
-        // rejects as a mismatch. whenReady rejects if the socket dies first.
+        // rejects as a mismatch. whenReady itself never settles when the socket
+        // closes first, so a close before the welcome fails here with its cause.
+        let stopWatching = (): void => undefined;
+        const closedFirst = new Promise<never>((_, reject) => {
+            stopWatching = chat.onStatus(status => {
+                if (status === 'disconnected') {
+                    let cause = lastSocketError || 'closed by the server — is the origin allow-listed?';
+                    if (/Unexpected server response: (403|502)/.test(cause)) {
+                        cause += ' — the relay refuses an Origin that is not allow-listed (or the relay is down)';
+                    }
+                    reject(new Error(`socket closed before the relay's welcome: ${cause}`));
+                }
+            });
+        });
+        let timer: NodeJS.Timeout | undefined;
         const cid = await Promise.race([
             chat.whenReady(),
-            new Promise<never>((_, reject) => setTimeout(() => reject(new Error('welcome timeout (origin allow-listed? relay up?)')), 15_000))
-        ]);
+            closedFirst,
+            new Promise<never>((_, reject) => {
+                timer = setTimeout(() => reject(new Error('no welcome from the relay within 15s (relay up? origin allow-listed?)')), 15_000);
+            })
+        ]).finally(() => {
+            stopWatching();
+            clearTimeout(timer);
+        });
         emit.meta(`ready — cid ${cid}`);
 
         const tree = await chat.runFlow({ chatId, prompt });
         emit.meta(`run complete — ${tree.size} flow bundle(s)`);
-        for (const [flowId, bundle] of tree) {
-            emit.node(flowId, bundle);
+        for (const [key, bundle] of tree) {
+            emit.node(key, bundle);
         }
+        emit.summary(true, tree);
     } catch (err) {
         code = 1;
-        emit.meta(`run FAILED: ${err instanceof Error ? err.message : String(err)}`);
+        const message = err instanceof Error ? err.message : String(err);
+        emit.meta(`run FAILED: ${message}`);
+        if (partial.size > 0) {
+            emit.meta(`partial tree — ${partial.size} flow bundle(s) at the failure`);
+            for (const [key, bundle] of partial) {
+                emit.node(key, bundle);
+            }
+        }
+        emit.summary(false, partial, message);
     } finally {
         chat.disconnect();
     }

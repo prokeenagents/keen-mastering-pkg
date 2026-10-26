@@ -7,7 +7,7 @@ as *"No tool response"*, a stalled flow, or a rejected deploy.
 
 This is the **static half** of the self-building feedback loop (see `shira-flow-builder-guide/`): an LLM
 that authors a flow can run this to catch most mistakes at compile time, before ever touching the engine.
-The **dynamic half** (deploy → run a test chat → read the platform's logs → classify) is `agent-runner/`.
+The **dynamic half** (deploy → run a test chat → read the returned flow-tree and live stream → classify) is `agent-runner/`.
 
 ## Usage
 
@@ -89,6 +89,9 @@ Two kinds of rule are enforced, and it matters which is which:
 **Cross-file & tool registry**
 - Flow file names are PascalCase (`^[A-Z][A-Za-z0-9]*$`, the ms-space `startFlow` rule); builds a registry of every
   `File-Label` (each flow's Start labels, as the deploy compiler builds it).
+- A flow file name with **digits** is a warning: ms-space accepts it as an agent's start flow, but a `File-Label`
+  is letters only (`^[A-Z][a-zA-Z]*-[A-Z][a-zA-Z]*$`), so no Run / Jump / Flow Pointer / Parallel Context node or
+  flow tool can ever target it. Use letters only.
 - Run / Jump / Parallel Flow / Parallel Context targets resolve to a real `File-Label`.
 - Script nodes point to an existing file under `src/scripts/`.
 - `keen-tools.json`: `{ "tools": [ { name, type, entry } ] }`; unique names; `script` entry under `tools/`

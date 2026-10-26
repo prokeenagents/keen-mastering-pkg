@@ -12,7 +12,7 @@ recipe. The shape to hold in your head:
 
 - the **admin** builds the API access chain first (four bindings on one key → `05-api-access.md`),
 - the partner's **server** holds the long-lived credentials and does the exchanges,
-- the partner's **browser** only ever holds a short-lived per-user token,
+- the partner's **browser** only ever holds a per-user token (an end user's own access token),
 - and a **secure live connection** carries the actual chat.
 
 This is a **two-token, OAuth-style** model: the server's **application token** stays server-side; each
@@ -33,12 +33,25 @@ Golden path). Then hand the partner exactly three things:
 3. confirmation of the registered **Origin** and **notification URL**.
 
 **If the partner site is the reference site** (the entanglement project), those values go into its
-`.env.local`: `KEEN_HOST` / `KEEN_WS` (local vs sandbox), `KEEN_ORIGIN=<ngrok URL>` (the tunnel from
-`ngrok http 3000` — the same Origin you registered on the Webhook), `KEEN_CLIENT_ID` /
-`KEEN_CLIENT_SECRET`, `KEEN_API_KEY_ID` / `KEEN_API_KEY_SECRET`. Placeholders only — never write a
-real secret anywhere else. Then start it: `npm run dev-local` (`npm run dev-local:win` on Windows)
-when the sandbox uses a self-signed certificate, or `npm run dev` when the host has a trusted one —
-both are development servers; a production build is `npm run build` followed by `npm run start`.
+`.env.local` — the README's Golden path steps **6** and **9** give the exact order:
+
+| Key | Value |
+|---|---|
+| `KEEN_HOST` | LOCAL `https://localhost` · SANDBOX `https://<host>` (e.g. `https://keen.example.com`) |
+| `KEEN_WS` | LOCAL `wss://localhost/ws-keen` · SANDBOX `wss://<host>/ws-keen` — the chat connection the **browser** opens. Point it at the Keen host, never at the ngrok tunnel. On LOCAL, open `https://localhost` once in the same browser and accept its self-signed certificate, or the chat socket closes silently. Plain `ws://` doesn't work from the https tunnel page (browsers block it as mixed content). |
+| `KEEN_ORIGIN` | `<ngrok URL>` — exactly the Origin on the Webhook (a placeholder such as `https://pending.local` for the very first boot) |
+| `KEEN_CLIENT_ID` / `KEEN_CLIENT_SECRET` | the Client's id + secret |
+| `KEEN_API_KEY_ID` / `KEEN_API_KEY_SECRET` | the Api Key's id + secret |
+
+The site **refuses to boot** unless the six values other than `KEEN_WS` are all filled (always set
+`KEEN_WS` too — without it the chat never connects), and it reads them **only when it starts** —
+after any `.env.local` change, stop it and start it again.
+Placeholders only in notes — never write a real secret anywhere else. Start it with
+`npm run dev-local` (`npm run dev-local:win` on Windows) when the Keen host uses a self-signed
+certificate, or `npm run dev` (`npm run dev:win`) when it has a trusted one — both are development
+servers; a production build is `npm run build` followed by `npm run start`. **The tunnel goes to the
+port the site reports** in its `Local: http://localhost:<port>` line — `ngrok http <port>`; 3000 only
+if 3000 was free (on a machine that also runs a local Keen stack's admin console on 3000, it's 3001).
 Its notification URL is `<ngrok URL>/api/keen-webhook`.
 
 Finally, on the key's page: **Rebuild Resource Cache** (the api-key cascade, `07-caches.md`), then
@@ -47,12 +60,13 @@ Finally, on the key's page: **Rebuild Resource Cache** (the api-key cascade, `07
 ## The wiring, step by step (server first, then browser)
 
 1. **Keep the credentials server-side.** The Client secret and API key live on the partner's server,
-   never in the browser. The browser only ever holds a short-lived access token minted for an end user.
+   never in the browser. The browser only ever holds an access token minted for one end user.
 2. **Get an application token.** The server exchanges its client credentials for an **application
    token** — the standing credential it presents on each end user's behalf. It stays on the server.
-   It has **no expiry and no refresh**: it keeps working until the admin **deletes** the key or
-   changes which client the key is bound to — then the server simply requests a new one (the
-   reference site requests it at start-up and retries until it succeeds).
+   It has **no expiry and no refresh**: it keeps working until the admin **deletes** the key,
+   unbinds any of its four bindings, or binds it to a different client (a different certificate or
+   contract, or a new contract key, also refuses it for partner sign-ups) — then the server simply
+   requests a new one (the reference site requests it at start-up and retries until it succeeds).
 3. **Complete the certificate handshake.** The server asks for a one-time **code**, then **claims** it.
    On a valid claim, KeenAgents delivers the **certificate material** (the public key the site uses to
    verify KeenAgents-issued tokens, plus the shared secret) to the registered **notification URL**.
@@ -61,7 +75,7 @@ Finally, on the key's page: **Rebuild Resource Cache** (the api-key cascade, `07
    **Wake** — both deliver it afresh.)
 4. **Fetch the resources.** With the application token the server reads its **consumer contract**,
    its **consumer policy** and each **agent's front settings** — these three are scoped to that one
-   key, so a partner only ever sees its own tenant's data. The **space list** is different: it
+   key, so for them a partner only ever sees its own tenant's data. The **space list** is different: it
    returns the organization's **whole** space collection (every space, with its agents), not just the
    partner's — the partner must keep only the spaces listed in its **consumer contract** (that
    `spaces` set is the boundary of what it may use).
@@ -149,8 +163,17 @@ re-read.
   outage → `05-api-access.md`.
 - **Run agents by slug.** Naming the display name or any other identifier fails — the slug is the
   stable handle (`03-spaces-and-agents.md`).
-- **Credentials stay on the server.** Only the short-lived per-user access token belongs in the browser
-  — never the client secret or the API key.
-- **The tunnel URL is the Origin — in two places.** With ngrok, the Webhook entry's Origin, its
-  notification URL (`<ngrok URL>/api/keen-webhook`) and the site's `KEEN_ORIGIN` must all carry the
-  **same** URL; a new ngrok URL (restarting the tunnel) means updating all three, then Rebuild + Wake.
+- **Credentials stay on the server.** Only the per-user access token belongs in the browser — never
+  the client secret or the API key.
+- **The tunnel URL lives in four places.** A new ngrok URL (a free tunnel gets one each time it
+  restarts) means moving all four together:
+  1. the **Webhook** record — both its **Origin** and its **Webhook URL**
+     (`<ngrok URL>/api/keen-webhook`), Api → Webhooks → the webhook → **Save**;
+  2. the site's `KEEN_ORIGIN` — then **restart** the site (the restart also gets it a fresh
+     application token);
+  3. the agent-runner's `KEEN_ORIGIN`, if you use the runner (`../keen-mcp-guide/README.md`);
+  4. every **consumer token** issued under the old URL — the origin is written into each token:
+     people simply sign in again; an MCP consumer's token is re-minted through the Keen MCP server.
+
+  Then on the key: **Rebuild Resource Cache** (a Webhook edit reaches the allow-list only through a
+  Rebuild) and **Wake**. Miss one and the calls are silently dropped or the tokens are refused.

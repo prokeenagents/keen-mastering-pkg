@@ -31,8 +31,8 @@ with one **In** dot on top and two labelled output dots: **True** on the left, *
 The card face shows the expression (truncated with `…`), and the description under the diamond.
 
 Wire it: the **In** dot from the previous node; the **True** dot to whatever should run when the
-condition holds; the **False** dot to the other path. Either output may be left unwired (that branch
-simply ends).
+condition holds; the **False** dot to the other path. Either output may be left unwired — that branch
+simply ends there (`keen-validate` warns about it, so leave one open only on purpose).
 
 ## Settings
 
@@ -54,12 +54,12 @@ PascalCase rule that governs Start labels does **not** apply.
       "type": "conditionNode",
       "position": { "x": 304, "y": 304 },
       "data": {
-        "label": "dictionary.test > 25",
+        "label": "${dictionary.test} > 25",
         "description": "Welcome to condition",
         "labelNode": "Condition",
         "descriptionNode": "Set condition flow direction",
         "open": false,
-        "settings": { "value": "dictionary.test > 25" }
+        "settings": { "value": "${dictionary.test} > 25" }
       },
       "dragHandle": ".drag-handle__custom"
     }
@@ -116,8 +116,8 @@ So with `dictionary.test` holding `30`, the expression **`${dictionary.test} > 2
 > ⚠️ **You must wrap the data reference in `${...}`.** A **bare** `dictionary.test > 25` does **not**
 > work: nothing gets substituted, jsep then sees `dictionary.test` as a **member access**, and the
 > evaluator **throws** — *"Member access is not allowed"* / *"Identifier … is not allowed (placeholders
-> must be dictionary.* or session.*)"*. The value in the JSON above is shown as typed on the canvas; the
-> **runnable** form is `${dictionary.test} > 25`.
+> must be dictionary.* or session.*)"*. The canvas form accepts the bare form unvalidated, but
+> `keen-validate` rejects it; the JSON above uses the **runnable** form `${dictionary.test} > 25`.
 
 **What you can write** (anything else throws — the evaluator is deliberately minimal):
 
@@ -147,4 +147,4 @@ Near-zero — it evaluates one small expression and routes. It stores nothing of
 
 ---
 
-*Next node: End Flow (`end-flow-node.md`).*
+*Next node: Loop (`loop-node.md`).*

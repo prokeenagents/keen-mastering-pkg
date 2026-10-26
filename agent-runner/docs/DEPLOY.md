@@ -1,11 +1,11 @@
 # deploy — push flow/script code live
 
-`keen-deploy` (a compiled **Go** binary) is the **uploader** half of the loop. A flow runs from the platform's **deployed** copy, not your working files, so a building agent must deploy an edit before it can run it. This speaks the Keen deploy endpoint's protocol directly, in pure Go stdlib (no Node, nothing to compile — prebuilt in `../bin/`). `deploy.ts` is the TypeScript reference of the same protocol (it has no `--insecure` / `-h`; with a self-signed cert run it under `NODE_TLS_REJECT_UNAUTHORIZED=0`); the binary is what you run.
+`keen-deploy` (a compiled **Go** binary) is the **uploader** half of the loop. A flow runs from the platform's **deployed** copy, not your working files, so a building agent must deploy an edit before it can run it. This speaks the Keen deploy endpoint's protocol directly, in pure Go stdlib (no Node, nothing to compile — prebuilt in `../bin/`). `deploy.ts` is the TypeScript reference of the same protocol (it has no `--insecure`; with a self-signed cert run it under `NODE_TLS_REJECT_UNAUTHORIZED=0`); the binary is what you run. Both take `--key value` or `--key=value` and `-h` / `--help`.
 
 ## What it does (synchronous — one call, one verdict)
 
 1. **connect** — `POST https://<host>/ms/deploy/v1/project/connect` with the deployment token + space → a short-lived session token (default TTL 5 min, returned as `expiresIn` seconds). The platform holds ONE live deploy connection: a connect for another space evicts it; a repeat connect for the same space keeps the session and extends the TTL.
-2. **zip** — `KEEN_PROJECT_DIR` is the project **ROOT**; the tool packs the CONTENTS of its `src/` in memory (Go's native `archive/zip`, so Windows/macOS/Linux all work with no external `zip`) so `flows/` + `scripts/` land at the zip root. (If the root has no `src/`, it zips the root's contents — back-compat.) Skips `node_modules`, `.git`, stray `*.zip`, and the deploy's own `scanning/`/`uploads/` staging.
+2. **zip** — `KEEN_PROJECT_DIR` is the project **ROOT**; the tool packs the CONTENTS of its `src/` in memory (Go's native `archive/zip`, so Windows/macOS/Linux all work with no external `zip`) so `flows/` + `scripts/` land at the zip root. (If the root has no `src/`, it zips the root's contents — back-compat.) **Only what the platform builds is uploaded:** `flows/`, `scripts/` and `keen-tools.json` at the top; every other top-level entry is left out and named in the `zip` line's `skipped`, and dot-entries (`.env`, `.vscode/keen.json`, `.git` …), `node_modules` and stray `*.zip` files are skipped at any depth. A directory without `flows/` is refused **before anything is sent** (exit 2) — so pointing the tool at the wrong folder (e.g. `agent-runner/` itself, with its `.env`) can never upload secrets.
 3. **upload** — `POST /v1/project/upload` (multipart, field `bundle`). The platform **builds (compiles your `.flow` files), checks the structure, scans and promotes it, and answers right away** — no polling.
 4. **disconnect** — best-effort.
 
@@ -38,7 +38,7 @@ Config (flag first, then `.env` in the working dir — write values **unquoted**
 ```jsonc
 {"t":"meta","step":"connect","base":"https://<host>/ms/deploy","space":"<space>"}
 {"t":"meta","step":"connected","session":"b9946d53…"}
-{"t":"meta","step":"zip","root":"<abs project root>","zipping":"<abs project root>/src"}
+{"t":"meta","step":"zip","root":"<abs project root>","zipping":"<abs project root>/src","skipped":["README.md"]}   // skipped: only when something was left out
 {"t":"meta","step":"upload","bytes":130}
 {"t":"deployed","project":"<space>","generation":3}                 // success — exit 0
 ```
@@ -48,8 +48,9 @@ On failure:
 {"t":"rejected","error":"Invalid project structure","message":"…","reasons":["flows/ directory is missing"]}
 {"t":"fail","step":"connect","status":403, …}                        // bad deploy token / space (401 = a header missing · 503 = platform still bootstrapping)
 {"t":"fail","step":"upload","status":409, …}                         // a newer upload for the same space superseded this one
+{"t":"fail","step":"request","error":"fetch failed: …"}              // deploy.ts: network / TLS failure (keen-deploy reports it as status 0)
 ```
-Exit code: `0` deployed · `1` rejected/failed · `2` bad args.
+Exit code: `0` deployed · `1` rejected / failed (including a network or TLS failure) · `2` bad args or a directory without `flows/` (nothing was sent).
 
 ## What the project must contain (the scan)
 

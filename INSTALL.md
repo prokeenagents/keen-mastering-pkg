@@ -1,6 +1,6 @@
 # Install — Keen Mastering (5 minutes)
 
-**Prerequisites:** Node 18+, ngrok, and Claude Code (or another MCP-capable agent). No Go — the binaries are prebuilt.
+**Prerequisites:** Node 20+, ngrok, and Claude Code (or another MCP-capable agent). No Go — the binaries are prebuilt.
 
 1. Unpack the package and open a terminal **in this folder**.
 2. `claude` — start Claude Code here. Approve the `.mcp.json` prompt (it registers the `keen` MCP server for this folder only).
@@ -14,5 +14,5 @@
 **Checking a project later:** `/keen-project-validate` — pick it, get a pass/fail table (files, platform, site + tunnel, credentials) and the exact fix for anything wrong.
 **Working without a project (just log in as an MCP account):** `/keen-start` → **Just connect**.
 
-**Self-signed local certificate:** the local endpoint is plain HTTP on port 5545, so nothing to trust. To use `https://localhost/mcp` instead, start Claude Code with `NODE_EXTRA_CA_CERTS=<path to the sandbox's server.crt>`.
+**Self-signed local certificate:** a local *development* stack also publishes the MCP server as plain HTTP on port 5545 (what `.mcp.json` points at), so nothing to trust. A production-shaped local stack publishes only `https://localhost/mcp` behind its self-signed certificate — start Claude Code with `NODE_EXTRA_CA_CERTS=<path to the stack's server.crt>`, or use the stack's public hostname if it has one. `/keen-start` probes which one you have.
 **Where secrets live:** never in this folder's committed files — `agent-runner/.env` and the entanglement `.env.local` are yours to keep private.

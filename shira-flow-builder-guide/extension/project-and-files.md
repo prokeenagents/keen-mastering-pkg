@@ -45,7 +45,9 @@ determines what it *is*:
 
 - **`src/flows/`** — your **flows** (`.flow` files). This folder is **flat**: only top-level, PascalCase
   `*.flow` files (`/^[A-Z][A-Za-z0-9]*$/`). A subfolder here is a warning; a non-PascalCase name is an
-  error; **zero `.flow` files is fatal**. (These are the **extension's** checks — they land in the Problems
+  error; **zero `.flow` files is fatal**. **Use letters only** even though digits pass: a node or flow tool
+  targets a flow by its `File-Label`, which is letters only, so `Report2.flow` could be an agent's start
+  flow but never a Run / Jump / Flow Pointer / Parallel Context target (`keen-validate` warns). (These are the **extension's** checks — they land in the Problems
   panel and keep the panel's Connect / Upload buttons disabled while errors exist. The server-side deploy
   scan does **not** check names; it only requires `flows/` to hold ≥ 1 `.flow` that parses as JSON, plus a
   clean security scan.) Keeping every flow as its own file (not one giant flow) is what
@@ -69,7 +71,7 @@ Exactly **three** string fields:
 
 ```json
 {
-  "server": "https://localhost",
+  "server": "https://keen.example.com",
   "space":  "<your-space-id>",
   "token":  "<your-deployment-token>"
 }
@@ -77,7 +79,7 @@ Exactly **three** string fields:
 
 | Field | What it is | How to fill |
 |---|---|---|
-| **`server`** | Base URL of your KeenAgents instance (deploy calls go to `{server}/ms/deploy/v1/project/…`; it's also the **host** the debuggers attach to). | `https://localhost` for the local sandbox; `https://<your-domain>` otherwise. |
+| **`server`** | Base URL of your KeenAgents instance (deploy calls go to `{server}/ms/deploy/v1/project/…`; it's also the **host** the debuggers attach to). | `https://keen.example.com` (your instance's host); `https://localhost` for a local sandbox. |
 | **`space`** | The AI **Space id** — **and** the engine's **project id** (your deployed code lives under that id). | Copy the Space ID from the admin console (a `cm…` id). |
 | **`token`** | The Space's **deployment token**. | Copy/Reset it on the Space's page in the admin. |
 
@@ -109,8 +111,8 @@ runtime, is resolved as **`{ name, type, entry }`**:
 
 You rarely build one giant flow. You split logic across **several `.flow` files** and connect them:
 
-- **Each file is one flow**, named in **PascalCase** (`Project.flow`, `ZigZag.flow`), flat under
-  `src/flows/`.
+- **Each file is one flow**, named in **letters-only PascalCase** (`Project.flow`, `ZigZag.flow`), flat
+  under `src/flows/`.
 - **Call one flow from another** by its **`File-Label`** address (file name, a dash, a Start node's label):
   - **Run Flow** — run a sub-flow and come back (`nodes/run-flow-node.md`),
   - **Jump Flow** — hand off and finish there (`nodes/jump-flow-node.md`),
@@ -128,7 +130,8 @@ call any other — which is impossible if everything is crammed into one file.
 
 - **`package.json`** — `{ name, version:"0.0.1", private:true, "type":"module" }`. The **`type:"module"`**
   is the important part (ES-module scripts). There are **no deploy npm-scripts** — deploying is the
-  extension's **Connect → Upload** over HTTP, not `npm run` anything.
+  extension's **Connect → Upload** over HTTP, or `keen-deploy` (same endpoint) on the building-agent path,
+  not `npm run` anything.
 - **`.vscode/settings.json`** — an empty `{}`. A placeholder; `.flow` files open in the canvas via the
   registered custom editor, so no file-association is needed here.
 

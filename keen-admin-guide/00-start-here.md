@@ -62,8 +62,9 @@ the README's **Golden path** has the exact order. *(Set this expectation early �
 a chat box in the admin, and there isn't one.)*
 
 **Flow** — the step-by-step logic an agent follows (ask the model something, run a script, branch,
-answer). **Building flows has its own dedicated guide (coming separately).** Here we only cover
-*deploying* a built project and *debugging* it. *(Guide: `10-flows-and-debugging.md`)*
+answer). **Building flows has its own dedicated guide** (`../shira-flow-builder-guide/README.md`).
+Here we only cover *deploying* a built project and *debugging* it. *(Guide:
+`10-flows-and-debugging.md`)*
 
 **API access chain** — how an outside site is *allowed* to talk to your agents. It's four small
 records — a **Client** (the partner's identity), a **Certificate** (signing material), a **Consumer
@@ -94,7 +95,8 @@ account creates these and wires them up through the Keen MCP server; in the admi
 KeenAgents keeps a **ready-to-serve copy** of your configuration (your spaces, agents, API keys, and
 so on) so that admin pages and partner sites load **instantly** instead of waiting for a lookup every
 time. The important part: **it keeps this copy up to date for you automatically.** The moment you
-save a change, the copy refreshes — no button, no waiting.
+save a change, the copy refreshes — no button, no waiting. (One exception: an edit to a **Webhook**
+reaches the copy only when you press Rebuild on its key — `07-caches.md`.)
 
 So why is there a **Rebuild** button at all? As a just-in-case. If you ever suspect something didn't
 refresh (say after a big batch of changes, or a partner reports stale data), you can press it to
@@ -105,9 +107,11 @@ force a fresh copy. In day-to-day work you can ignore it. *(Guide: `07-caches.md
 **Wake** is a button on an API key that hands a **partner site** its starting kit — the certificate
 material it needs to trust our tokens — and tells it: "your configuration changed — go re-read it."
 The site then pulls the fresh values itself. It's how a partner stays current without constantly
-asking. Ordinary day-to-day changes send a lighter automatic nudge on their own; you press **Wake**
-yourself mostly to push the *first* configuration to a newly-wired partner (and after a Rebuild). It
-does **not** change any of your data — it only delivers and nudges. *(Guide: `08-wake.md`)*
+asking. Some changes send a lighter automatic nudge on their own — edits to the partner's contract,
+certificate, client or key. Changes to a **space**, an **agent** or an agent's front settings send
+**none**: for those you press **Wake** yourself, just as you do to push the *first* configuration to a
+newly-wired partner (and after a Rebuild). It does **not** change any of your data — it only
+delivers and nudges. *(Guide: `08-wake.md`)*
 
 ---
 

@@ -1,6 +1,6 @@
 # Session History — Shira Flow Builder
 
-Последна актуализация: 2026-09-12 (корекции след engine audit; виж §11)  
+Последна актуализация: 2026-10-26 (корекции в guide-а и почистване за публичния пакет; виж §11)  
 Език на работа: български  
 Статус: двата изградени примера работят
 
@@ -20,24 +20,25 @@
 
 ## 2. Важни директории
 
-Документация:
+Документация (в същия пакет):
 
-- `/home/n-ministation/Desktop/keen-admin-guide`
-- `/home/n-ministation/Desktop/shira-flow-builder-guide`
+- `keen-admin-guide/`
+- `shira-flow-builder-guide/`
 
 Работен проект:
 
-- `/home/n-ministation/Desktop/Building`
-- source root: `/home/n-ministation/Desktop/Building/src`
+- `<project-root>`
+- source root: `<project-root>/src`
 
 Технически бележки от отделните задачи:
 
-- `/home/n-ministation/Desktop/shira-flow-builder-notes/current-weather-tool-agent-loop/README.md`
-- `/home/n-ministation/Desktop/shira-flow-builder-notes/country-info-nested-flow-tool/README.md`
+- `shira-flow-builder-notes/current-weather-tool-agent-loop/README.md`
+- `shira-flow-builder-notes/country-info-nested-flow-tool/README.md`
+- `shira-flow-builder-notes/parallel-fanout-flow-tool/README.md`
 
-Това history repo:
+Тази history папка:
 
-- `/home/n-ministation/Desktop/shira-flow-builder-hystory`
+- `shira-flow-builder-hystory/`
 
 Името `hystory` е запазено точно както е поискано от потребителя.
 
@@ -155,7 +156,7 @@ Bare `flowContext.sessionId` в script tool принадлежи на самия
 Основен script:
 
 ```text
-/home/n-ministation/Desktop/Building/src/scripts/tools/weather.js
+<project-root>/src/scripts/tools/weather.js
 ```
 
 Tool registry entry:
@@ -207,7 +208,7 @@ Weather tool loop-ът заработи. Основното преносимо �
 Подробни бележки:
 
 ```text
-/home/n-ministation/Desktop/shira-flow-builder-notes/current-weather-tool-agent-loop/README.md
+shira-flow-builder-notes/current-weather-tool-agent-loop/README.md
 ```
 
 ## 5. Реализирана задача: Country Info nested flow tool
@@ -234,18 +235,20 @@ Weather tool loop-ът заработи. Основното преносимо �
 ### 5.2 Работни файлове
 
 ```text
-/home/n-ministation/Desktop/Building/src/flows/CountryInfo.flow
-/home/n-ministation/Desktop/Building/src/scripts/countryInfo/setup.js
-/home/n-ministation/Desktop/Building/src/scripts/countryInfo/returnToMain.js
-/home/n-ministation/Desktop/Building/src/scripts/tools/countryLookup.js
-/home/n-ministation/Desktop/Building/src/keen-tools.json
+<project-root>/src/flows/CountryInfo.flow
+<project-root>/src/scripts/countryInfo/setup.js
+<project-root>/src/scripts/countryInfo/returnToMain.js
+<project-root>/src/scripts/tools/countryLookup.js
+<project-root>/src/keen-tools.json
 ```
 
 Основният проектен flow е:
 
 ```text
-/home/n-ministation/Desktop/Building/src/flows/Project.flow
+<project-root>/src/flows/Project.flow
 ```
+
+(Име само с букви: цифри в името на flow файл минават като Start Flow, но File-Label target ги забранява — виж §11, 2026-10-26.)
 
 Agent IDs:
 
@@ -471,7 +474,7 @@ AgentOne
 
 В крайния trace нямаше `No tool response`.
 
-Важно уточнение: стандартните logs не dump-ваха целия `toolOptions` object. Изчезването/промяната на outer options през nested loop-а беше установено чрез комбинация от engine source, flow trace и LLM/script logs. Затова early capture в dictionary е архитектурно решение, а не случайна workaround стойност.
+Важно уточнение: стандартните logs не dump-ваха целия `toolOptions` object. Изводът тогава беше, че outer options изчезват/се променят през nested loop-а; той е **obsolete** (корекция 2026-09-12, виж §5.5): с референтните клиенти `returnToMain.js` вижда outer pack-а, а той липсва само в Run Flow / Parallel под-flow вътре в tool-а и при custom client без re-seed. Early capture в dictionary остава архитектурно решение — защитен мост за тези случаи, а не случайна workaround стойност.
 
 Потребителят потвърди с debugger screenshot, че може да прескача по nodes и да разглежда кода. Визуално се виждаха setup script, condition, `CountryAgent`, return script и `End Flow`.
 
@@ -500,7 +503,7 @@ Deployment credentials от `.vscode/keen.json` не трябва никога �
 Подробни бележки за тази задача:
 
 ```text
-/home/n-ministation/Desktop/shira-flow-builder-notes/country-info-nested-flow-tool/README.md
+shira-flow-builder-notes/country-info-nested-flow-tool/README.md
 ```
 
 Този технически файл е подробен (759 реда) и трябва да се използва при бъдещ debugging на същия pattern.
@@ -601,7 +604,7 @@ Prompt-ът трябва да различава success tag от validation/err
 - [ ] Прочети актуалните релевантни части от `shira-flow-builder-guide`.
 - [ ] Прочети актуалните релевантни части от `keen-admin-guide`.
 - [ ] Ако задачата засяга weather/country patterns, прочети съответния README в `shira-flow-builder-notes`.
-- [ ] Провери `/home/n-ministation/Desktop/Building/src` и Git status, ако има repo.
+- [ ] Провери `<project-root>/src` и Git status, ако има repo.
 - [ ] Не променяй unrelated user changes.
 - [ ] Не показвай съдържание на `.vscode/keen.json`.
 
@@ -682,3 +685,10 @@ AI паметта между отделни чатове не е автомат�
 - §7.1: `toolOptions.agentNode.agentId` не съществува; правилно е `toolOptions.toolContext.agentId`.
 - Няма промяна в работещия код на проектите; корекциите са в бележките и в `shira-flow-builder-guide` (tool-calling / building-tools / creating-tools / business-objects).
 
+### 2026-10-26 — корекции в guide-а срещу кода (без нова задача)
+
+- `gotchas.md` е допълнен с корекциите от 2026-09-12, които го бяха пропуснали: A3 — `flowContext.parentSessionId` **е** попълнен (= сесията на извикващия агент, същата стойност като `toolOptions.agentNode.flowContext.sessionId`); A4 — `toolOptions` оцелява вложения loop при референтните клиенти, липсва само в Run Flow / Parallel под-flow вътре в tool-а и при custom client.
+- Gotcha C8 е пренаписан: `next_1` е canvas handle id за повечето nodes и се пише; deploy компилаторът преименува само Start / Flow Pointer `next`, Condition `true`/`false` и Loop `out`. „Бъг в компилатора на Condition“ няма. Таблицата е в `field-rules.md` → *Handle ids*.
+- Fallback на Agent node: config / payload грешка (E6101 — липсващ agentId / llm, непознат модел; E6002 — няма user message) също минава по Fallback, а ако не е вързан — по `next_1` с текста на грешката като отговор.
+- Имена на flow файлове: само букви. Цифрите минават като Start Flow (ms-space), но всеки File-Label target е само с букви; `keen-validate` предупреждава. Главният flow на проекта в бележките е `Project.flow`.
+- Бележките и тази история са почистени от per-project състояние: абсолютни пътища → `<project-root>` / пътища в пакета; реални space / flow / session / correlation id-та → placeholders. Техническите изводи са непроменени.

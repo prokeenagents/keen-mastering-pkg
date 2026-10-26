@@ -36,17 +36,17 @@ the maximum number of…" message. Delete one first, then create.
 
 | Field | Rule |
 |---|---|
-| **Agent ID (slug)** | kebab-case (lowercase **letters only** — no digits — joined by single dashes), **3–100** chars |
+| **Agent ID (slug)** | kebab-case (lowercase **letters only** — no digits — joined by single dashes), **3–100** chars, **unique across the organization**. Pick **4–60**: the flow builder's Agent ID field accepts only that, so such a slug passes every check |
 | **Agent display name** | required, **3–150** chars |
 | **Start Flow / Start Node** | **PascalCase** (capital first, letters+digits, no dashes), **3–60** chars each |
 | **Agent Json / Front Settings** | up to **1,000,000** characters each |
 | **API Key name** | required, up to **100** chars, unique |
 | **Client name** | required, **1–100** chars, unique |
-| **Certificate name** | required, up to **100** chars, unique; optional **shared secret key 16–32** chars (left empty = no secret, shown as `Unset`) |
+| **Certificate name** | required, up to **100** chars, unique; optional **shared secret key 16–32** chars (left empty = no secret, shown as `Unset` — consumer tokens are then sealed with a fixed built-in key, so set one) |
 | **Consumer Contract name** | required, up to **100** chars, unique |
 | **Consumer Contract key** | exactly **19** characters (A–Z, a–z, 0–9) — the tenant identifier, whether you type it or let it be minted |
 | **Webhook name / Origin / URL** | name up to **100** chars; Origin `scheme://host[:port]` (no path, no trailing slash; up to 200); URL a full `http(s)://` address up to 500 — all three unique |
-| **Space title / description** | both required and **unique**; description up to **500** chars |
+| **Space title / description** | both required and **unique**; title up to **150** chars, description up to **500** |
 | **Role name** | required, unique, up to **60** chars; it may not be — or contain — `admin`, `owner`, `developer` or `default` |
 | **Account email** | required, valid email, **globally unique** across the organization (the per-tenant email rule is for *consumers*, not admin accounts) |
 | **MCP account name** | required, **unique** across MCP accounts (a duplicate is refused), and **immutable** — read-only after create; a wrong name means delete + re-create |

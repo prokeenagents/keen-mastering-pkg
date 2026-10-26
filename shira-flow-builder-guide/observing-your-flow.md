@@ -5,8 +5,8 @@ runtime** — which branch did it take, what did that external call return, why 
 
 A live run is a black box until you open it. You have two windows:
 
-- **On a sandbox, while debugging** — the debugger (breakpoints, step through nodes). See `flow-lifecycle.md`
-  and `gotchas.md`.
+- **On a sandbox, while debugging** — the debugger (breakpoints, step through nodes). See
+  `extension/debugging.md`.
 - **On any live run (including production)** — the log lines your scripts write with **`system/log`**, which
   the platform can now **stream live** to whoever is watching, and store. That's this page.
 
@@ -23,19 +23,27 @@ Inside any Script node's `exec`, import the logger and call one of its four leve
 engine: the API is exactly these four — there is no `Log.log`.)
 
 ```js
+import Http from 'system/http';
 import Log from 'system/log';
 
-export function exec(props) {
+export const exec = async (props) => {
     Log.info(`resolved user ${props.userId}, calling billing`);
 
-    // …work…
+    let result;
+    try {
+        result = await Http.getJson(`https://api.example.com/billing/${encodeURIComponent(props.userId)}`);
+    } catch (e) {
+        Log.error(`billing unreachable: ${e.message}`);   // the failures that matter
+        return { ok: false };
+    }
 
     if (!result.ok) {
         Log.warning(`billing soft-failed: ${result.status}`);
+        return { ok: false };
     }
-    Log.error(`billing rejected: ${result.status}`);   // the failures that matter
     Log.debug(`raw payload: ${JSON.stringify(result.body)}`);
-}
+    return { ok: true };
+};
 ```
 
 | Level | Use it for |
@@ -94,5 +102,6 @@ actually debug in production; a silent flow is a black box again. Log deliberate
 ## See also
 
 - `best-practices.md` — *what* to log (and the other habits that make a flow debuggable).
-- `flow-lifecycle.md` — the sandbox debugger, for stepping through a run while you build.
+- `extension/debugging.md` — the sandbox debuggers, for stepping through a run while you build.
+- `flow-lifecycle.md` — what happens to a run from start to exit.
 - The admin console's **Logs** section — where a Log Record is created and where the live stream is watched.

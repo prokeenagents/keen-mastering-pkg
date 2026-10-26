@@ -40,8 +40,9 @@ Every tool reads the same **`.env`** (`agent-runner/.env`), so the loop is just 
 |---|---|---|---|
 | **`keen-validate`** | `bin/` (prebuilt) | Go binary — static pre-deploy validator. `keen-validate --help` | `agent-runner/docs/VALIDATE.md` · rules in `keen-flow-validator/README.md` |
 | **`keen-deploy`** | `bin/` (prebuilt) | Go binary — the uploader (connect → zip → upload). `keen-deploy --help` | `agent-runner/docs/DEPLOY.md` |
-| **`run.ts`** | `bin/` | The prebuilt `keen-validate` + `keen-deploy` binaries for linux / darwin / windows × amd64 / arm64. Nothing to compile. (The distributed package ships binaries only; the Go sources live in the maintainers' working copy.) |
-| `agent-runner/` | TypeScript runner — drives the ChatSDK / **TaskQueue** and prints the trace. `npx tsx run.ts --help` | `agent-runner/README.md` · `agent-runner/docs/USAGE.md` |
+| **`run.ts`** | `agent-runner/` | TypeScript runner — drives the ChatSDK / **TaskQueue** and prints the trace (`npm install` once). `npx tsx run.ts --help` | `agent-runner/README.md` · `agent-runner/docs/USAGE.md` |
+
+`bin/` holds the two binaries for linux / darwin / windows × amd64 / arm64 — nothing to compile. (The distributed package ships binaries only; the Go sources live in the maintainers' working copy.)
 
 **Why two of them are Go:** `keen-validate` and `keen-deploy` are compiled binaries — one file each, **no Node source, no `npm install`, nothing to compile**, and they run the same on Windows / macOS / Linux. Only `run.ts` stays TypeScript, because it drives the **TaskQueue** — the same WebSocket run-orchestration the browser (entanglement / the Shira canvas) uses. That one piece is TS so it can be reused in the browser; everything the browser doesn't need is Go.
 

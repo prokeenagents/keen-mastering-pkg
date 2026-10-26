@@ -25,7 +25,8 @@ that's exactly who this is for.
 - Give one concrete action at a time; confirm, then the next.
 - **Never invent a flow name or node name.** A flow's file name and its Start node must **exactly match**
   the **Start Flow / Start Node** set on the agent in the admin (PascalCase, exact) — a made-up name saves
-  but the agent never runs.
+  but the agent never runs. Use **letters only** in flow file names: a digit passes as a Start Flow, but no
+  node or flow tool can then target that flow (`field-rules.md`).
 - **Verify against the source, don't guess.** This guide was written against the engine + canvas code; keep
   it that way when you extend it.
 - Walk them to a **working end-to-end** result, not just a diagram.
@@ -40,14 +41,20 @@ that's exactly who this is for.
 - A **flow** is a **graph of nodes** wired by **edges**, drawn on the **canvas**. It's the step-by-step
   logic an agent runs.
 - Execution **starts at a Start node** (chosen by its `File-Label`) and follows the wired **output dots**
-  to an **End** node.
+  to an **End** node. Each dot has a **handle id** that an edge names (`next_1` for most out dots, `in`
+  for most inputs); the deploy compiler renames the few canvas-only ids (`next`, `true` / `false`, `out`)
+  onto the engine's `next_1` / `next_2` keys — write the canvas ids (`field-rules.md` → *Handle ids*).
 - **Edges carry control, not data.** Data lives in shared objects: the **`dictionary`** (per-flow),
   the **`session`** (whole-run), and the **conversation** (agent messages). A node *writes* a value; a later
   node *reads* it. (This is the key idea — see `business-objects.md`.)
 - Flows **compose**: **Run Flow** calls a sub-flow, **Jump Flow** hands off, **Parallel Flows** / **Parallel
   Context** run flows at once.
-- **Workflow:** open Shira in VS Code → draw + configure on the canvas → **debug** on a **sandbox** →
-  **deploy** to a space → the agent, pointed at your flow's name + start node, runs it.
+- **Workflow — two paths to the same files.** A *person* opens Shira in VS Code → draws + configures on
+  the canvas → **deploys** with the panel (Connect → Upload) → **debugs** on a **sandbox**. A *building
+  agent* (you) writes the same `.flow` / script / `keen-tools.json` files by hand → `keen-validate` →
+  `keen-deploy` (the same deploy endpoint the panel calls) → prompts the agent with `run.ts` and reads the
+  logs. Either way the agent, pointed at your flow's name + start node, runs it. The pages under
+  `extension/` describe the human path.
 
 ---
 
@@ -94,8 +101,9 @@ All 14 node types, one page each:
 2. See a minimal agent → `minimal-agent.md`  ·  or a fuller example → `example-basic-flow.md`
 3. Learn the nodes you need → `nodes/`
 4. Keep the file canvas-valid → `field-rules.md`
-5. Set up the project + deploy → `extension/project-and-files.md` + `extension/the-panel.md`
-6. Debug on a sandbox → `extension/debugging.md`
+5. Set up the project + deploy → `extension/project-and-files.md` + `extension/the-panel.md` (a building
+   agent: `keen-validate` → `keen-deploy`, see `agent-runner/docs/DEPLOY.md`)
+6. Debug on a sandbox → `extension/debugging.md` · watch the logs → `observing-your-flow.md`
 7. Match the agent in the admin → `keen-admin-guide/03-spaces-and-agents.md`
 
 ---

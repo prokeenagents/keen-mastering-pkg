@@ -138,4 +138,4 @@ values are.
 
 ---
 
-*Next node: End Flow (`end-flow-node.md`).*
+*Next node: Script (`script-node.md`).*

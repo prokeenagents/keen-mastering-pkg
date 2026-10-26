@@ -102,7 +102,11 @@ a Space also refreshes `agents` (its agents cascade away). You don't do anything
 ## Why we do it this way
 
 - **Instant reads** — partner sites and admin pages never wait on a live lookup.
-- **Tenant isolation** — a partner only ever receives the resources bound to its own API key.
+- **Tenant isolation** — a partner's contract, policy, agent front settings and certificate are the
+  ones bound to its own API key. (One exception today: the space list a partner fetches is the
+  organization's **whole** list, every space with its agents — the partner keeps only the spaces its
+  contract grants, `06-connect-a-partner-site.md`. What its consumers can actually *run* is still
+  limited to the contract's spaces.)
 - **Self-healing** — the copy converges back to the truth on its own; the buttons are a
   convenience, not a repair.
 - **One key, one click** — a partner reads everything *through* its API key, so the key's own
@@ -119,7 +123,10 @@ Wake are two separate things — see `08-wake.md`.
 
 ## Watch out for
 
-- **Don't Rebuild after a normal Save** — it's redundant; the copy already refreshed.
+- **Don't Rebuild after a normal Save** — it's redundant; the copy already refreshed. (Redundant,
+  not harmful: the README's "one Rebuild, one Wake" after a change is the always-safe routine.) The
+  exception is a **Webhook** edit — its new Origin / URL reach the copy only through a Rebuild on its
+  key (or on the webhook's own page).
 - **Invalidate leaves a gap** — nothing is served for that resource until it rebuilds. Prefer
   Rebuild (atomic swap) unless you specifically want it empty.
 - **The buttons are permission-gated** — if a teammate says "I don't see a Rebuild button," they're

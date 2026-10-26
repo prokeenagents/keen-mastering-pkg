@@ -40,7 +40,7 @@ nodes*.)
     {
       "id": "startNode_a1b2c3d4e5f6",
       "type": "startNode",
-      "position": { "x": 320, "y": 40 },
+      "position": { "x": 480, "y": 48 },
       "data": {
         "label": "Start", "description": "Some interesting description",
         "labelNode": "Start Flow", "descriptionNode": "Flow entry point",
@@ -51,7 +51,7 @@ nodes*.)
     {
       "id": "startNode_g7h8i9j0k1l2",
       "type": "startNode",
-      "position": { "x": 48, "y": 232 },
+      "position": { "x": 48, "y": 480 },
       "data": {
         "label": "Entry", "description": "",
         "labelNode": "Start Flow", "descriptionNode": "Flow entry point",
@@ -62,7 +62,7 @@ nodes*.)
     {
       "id": "scriptNode_m3n4o5p6q7r8",
       "type": "scriptNode",
-      "position": { "x": 320, "y": 232 },
+      "position": { "x": 480, "y": 480 },
       "data": {
         "label": "", "description": "",
         "labelNode": "Script", "descriptionNode": "Execute custom JS script",
@@ -73,7 +73,7 @@ nodes*.)
     {
       "id": "agentNode_s9t0u1v2w3x4",
       "type": "agentNode",
-      "position": { "x": 320, "y": 424 },
+      "position": { "x": 480, "y": 912 },
       "data": {
         "label": "", "description": "This is the initial agent",
         "labelNode": "LLM", "descriptionNode": "Use LLM processor",
@@ -93,7 +93,7 @@ nodes*.)
     {
       "id": "endNode_y5z6a7b8c9d0",
       "type": "endNode",
-      "position": { "x": 320, "y": 640 },
+      "position": { "x": 480, "y": 1344 },
       "data": {
         "label": "Terminal", "description": "",
         "labelNode": "End Flow", "descriptionNode": "Flow terminal",
@@ -133,8 +133,8 @@ nodes*.)
 
 ### What to notice (each references a node page)
 
-- **Two `startNode`s** — `Start` (`next` → Script) and `Entry` (`next` → straight to the LLM). The agent's
-  out handle id is `next`. → `nodes/start-flow-node.md`
+- **Two `startNode`s** — `Start` (`next` → Script) and `Entry` (`next` → straight to the LLM). A Start
+  node's out handle id is `next`. → `nodes/start-flow-node.md`
 - **Script** `init.js` — `in` from Start, **`next_1`** (Out) → LLM, **`error`** (Error) left unwired here.
   → `nodes/script-node.md`
 - **LLM** `AgentOne` (`agentId: "agent-one"`) — receives from **both** the Script and `Entry` on its `in`
@@ -143,6 +143,8 @@ nodes*.)
   **`error`** (Fallback) unwired. → `nodes/agent-node.md`
 - **End** — `in` only. → `nodes/end-flow-node.md`
 - Every edge carries **`"type": "step"`** and the five identity fields.
+- Positions are on the 16px grid, **432px** apart along the chain and across the two columns
+  (`best-practices.md` → *Canvas layout*).
 
 ## Running it — matching the agent
 
@@ -155,8 +157,9 @@ To have a Keen **agent** run this, set the agent's **Start Flow** = the file nam
 Both must be **PascalCase** and match the Start node labels **exactly** (see `nodes/start-flow-node.md` →
 *The link to the agent*, and `keen-admin-guide/03-spaces-and-agents.md`).
 
-> The node ids above are illustrative (`startNode_` + 12 chars). In a real file the canvas generates them;
-> you never type them by hand.
+> The node ids above are illustrative (`startNode_` + 12 chars). On the canvas they're generated for you;
+> when you write the file by hand, generate 12 random `A–Za–z0–9` characters per node (unique in the file)
+> and build each edge `id` from them.
 
 ---
 

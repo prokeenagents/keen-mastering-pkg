@@ -43,17 +43,17 @@ unwired means the loop has no body.
 
 | Field | Required | What it is |
 |---|---|---|
-| **Read from** | **yes** | A **reference** to the store slot holding the **array** to iterate — `data.settings.value`. Must be **`dictionary.<path>`** or **`session.<key>`** (see the ⚠️ below). It must resolve to an array like `[1,2,3,4,5]`. |
-| **Set to** | **yes** | A **reference** to the slot that receives the **current element** on each pass — `data.settings.setto`. Same `dictionary.<path>` / `session.<key>` rule. Iteration 1 writes element `[0]`, iteration 2 writes `[1]`, … The body reads the current element from here. |
+| **Read from** | **yes** | A **reference** to the store slot holding the **array** to iterate — `data.settings.value`. Must be **`dictionary.<path>`** or **`session.<key>`** (see the ⚠️ below). It must resolve to an array like `[1,2,3,4,5]` — so in practice a **`dictionary.`** path: a session value can never be an array, and a `session.` source goes straight to **Finish**. |
+| **Set to** | **yes** | A **reference** to the slot that receives the **current element** on each pass — `data.settings.setto`. Same `dictionary.<path>` / `session.<key>` rule (a `session.` target only for **primitive** elements — an object or array element is rejected). Iteration 1 writes element `[0]`, iteration 2 writes `[1]`, … The body reads the current element from here. |
 | **Description** | no | A plain note; no effect on running. |
 
 > ⚠️ **`Read from` and `Set to` are path *references*, and they MUST carry the root prefix**
 > `dictionary.` or `session.` (an optional `${…}` wrapper is allowed — `${dictionary.fromProp}` works
-> too). A **bare** `fromProp` / `result` (as shown in the example JSON, and as the canvas accepts them
-> unvalidated) does **not** run: the engine's `parsePath` returns nothing and `loopNode` **throws**
-> *"LoopNode: invalid 'value' — expected dictionary.<path> or session.<key>"*. So the **runnable** form
-> of the example is `value: "dictionary.fromProp"`, `setto: "dictionary.result"`. `dictionary.*` may be a
-> **nested** dot-path; `session.*` is a **flat** key. These are references (which slot), **not**
+> too). A **bare** `fromProp` / `result` (which the canvas form accepts unvalidated) does **not** run: the
+> engine's `parsePath` returns nothing and `loopNode` **throws** *"LoopNode: invalid 'value' — expected
+> dictionary.<path> or session.<key>"*, and `keen-validate` rejects it. Write the prefixed form, as the
+> example below does: `value: "dictionary.fromProp"`, `setto: "dictionary.result"`. `dictionary.*` may be
+> a **nested** dot-path; `session.*` is a **flat** key. These are references (which slot), **not**
 > `${...}` value-interpolation and not identifiers with a naming rule.
 
 ## What a Loop node looks like in the `.flow` file
@@ -70,7 +70,7 @@ unwired means the loop has no body.
         "labelNode": "Loop",
         "descriptionNode": "Loop dictionary iterable segment",
         "open": true,
-        "settings": { "value": "fromProp", "setto": "result" },
+        "settings": { "value": "dictionary.fromProp", "setto": "dictionary.result" },
         "description": "test"
       },
       "dragHandle": ".drag-handle__custom"
@@ -84,8 +84,8 @@ unwired means the loop has no body.
 |---|---|---|
 | `id` | `loopNode_` + **12** `A–Za–z0–9` | id; the `loopNode_` prefix carries the kind |
 | `type` | `"loopNode"` | mandatory node kind |
-| `data.settings.value` | dict property name | **Read from** — the array to iterate |
-| `data.settings.setto` | dict property name | **Set to** — where each element lands |
+| `data.settings.value` | `dictionary.<path>` reference | **Read from** — the array to iterate |
+| `data.settings.setto` | `dictionary.<path>` (or `session.<key>`) reference | **Set to** — where each element lands |
 | `data.label` | often empty | the loop has no natural one-line label; the card shows the description |
 | `data.labelNode` | **fixed** `"Loop"` | card title |
 | `data.descriptionNode` | **fixed** `"Loop dictionary iterable segment"` | card subtitle |
@@ -139,7 +139,8 @@ Key consequences for an author:
 ## ⚠️ Watch out for
 
 - **Wire `Next` back to the loop**, or the body runs once and the loop never advances.
-- **`Read from` must hold an array** — point it at a dictionary property that actually contains a list.
+- **`Read from` must hold an array** — point it at a dictionary property that actually contains a list
+  (never `session.` — session values are primitives).
 - **Out / Next are a cycle, Finish is the exit** — don't wire the body straight into Finish.
 
 ## ⏱ Performance
@@ -149,4 +150,4 @@ large array means the body runs many times — size it with that in mind.
 
 ---
 
-*Next node: End Flow (`end-flow-node.md`).*
+*Next node: Run Flow (`run-flow-node.md`).*

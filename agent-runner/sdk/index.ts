@@ -318,8 +318,8 @@ export default class ChatAPI {
 
     /**
      * Fire a heartbeat ping. Relay derives the cid from the WebSocket
-     * itself; no payload. TaskQueue calls this every ~20s while a run
-     * is in flight so the engine's dict / session TTLs stay fresh
+     * itself; no payload. TaskQueue calls this every
+     * CHAT_SETTINGS.HEARTBEAT_INTERVAL_MS (5s) while a run is in flight so the engine's dict / session TTLs stay fresh
      * across idle gaps between per-node calls. Returns false if the
      * socket is not open — caller decides whether to retry.
      */

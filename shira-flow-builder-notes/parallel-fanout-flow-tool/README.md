@@ -1,8 +1,8 @@
 # Паралелен фен-аут: flow tool с Parallel Context и return bridge
 
 Дата: 2026-08-29
-Проект: `/home/n-ministation/Desktop/BuildTest`
-Пространство: `cmteq031i0007rz4iz6u4553y` · агент `agent-two` · модел `google/gemini-2.5-pro`
+Проект: `<project-root>`
+Пространство: `<space-id>` · агент `agent-two` · модел `google/gemini-2.5-pro`
 
 ## 1. Каква беше задачата
 
@@ -98,7 +98,10 @@ Agent node-ът е с `agentResponse: true` + `agentResponseProperty: "answer"`,
 
 - **Няма Condition node.** При невалиден вход `setup.js` оставя празен масив; Parallel Context
   при празна колекция просто продължава към Out, а `returnToMain` връща корекция. По-малко възли
-  и не се опира на gotcha C8 (deploy компилаторът, който бърка `true`/`false` с `next_1`/`next_2`).
+  и един клон по-малко за окабеляване и тест.
+  (Корекция 2026-10-26: по-ранна версия тук се позоваваше на „gotcha C8" — уж deploy компилаторът
+  бърка `true`/`false` с `next_1`/`next_2`. Такъв бъг няма: компилаторът мапва `true`→`next_1`,
+  `false`→`next_2` коректно; виж `shira-flow-builder-guide/field-rules.md` → *Handle ids*.)
 - **Няма отделен агент-разделител.** Главният агент сам вади въпросите в `!*context`. Спестява
   цяло LLM извикване.
 - **Елементите са обекти** — `[{q:"…"}]`, не `["…"]`. Не-обект се заменя с `{}` и клонингът тръгва празен.

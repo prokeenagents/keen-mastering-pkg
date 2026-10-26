@@ -2,8 +2,9 @@
 
 The chat client is a small, self‑contained TypeScript SDK in
 `src/service/services/chat/`. Every import inside it is relative, so it can be
-lifted into its own package; a *copy* of the same SDK also runs headless in the
-sibling `agent-runner` CLI, so it is transport‑agnostic about who drives it.
+lifted into its own package; a *copy* of the same SDK (`agent-runner/sdk/`) also
+runs headless in the sibling `agent-runner` CLI, so it is transport‑agnostic about
+who drives it.
 
 It is built as **five layers**, each a single class with one job. You use only the
 top one — **`ChatAPI`** — but knowing the layers explains the behaviour you'll see.
@@ -79,9 +80,11 @@ if (bytes > CHAT_SETTINGS.MAX_FRAME_BYTES) {
 }
 ```
 
-Retry policy is per‑call: **bounded (10 attempts)** for the *initial* run (a failed
-start means the user's request never began) and **infinite** for continuations (the
-flow is already alive on the server; keep trying until the socket recovers).
+Its retry is the **transport** retry — re‑sending, 1 s apart, while the socket isn't
+open; it never looks at the reply. Policy is per‑call: **bounded (10 attempts)** for
+the *initial* run (a failed start means the user's request never began) and
+**infinite** for continuations (the flow is already alive on the server; keep trying
+until the socket recovers).
 
 ### TaskQueue — the flow‑tree state machine
 `task-queue.ts`
@@ -101,9 +104,12 @@ directly; what matters is its behaviour:
   are normalised so a node stays pending until all its children finish. A large
   `parallelContext` fan‑out is drained in **batches of 15** so it never floods the
   Keen server (`CONTEXT_BATCH_SIZE`).
-- **Response retry.** On a non‑success, *non‑terminal* envelope it waits 1 s and
-  re‑issues the whole send+waitFor (bounded for the initial node, infinite for
-  continuations). Terminal codes (`E2…` / `E3…` / `E8…`) are surfaced, not retried.
+- **Response retry — per‑node calls only.** On a non‑success, *non‑terminal*
+  envelope to a per‑node call it waits 1 s and re‑issues the whole send+waitFor (up
+  to 10 times for an `initial` node, forever for continuations). Terminal codes
+  (`E2…` / `E3…` / `E8…`) are surfaced, not retried. The **initial run frame** gets
+  no response retry: any non‑success reply to it — `E4…` backpressure included —
+  throws at once and `runFlow()` rejects (see [`errors.md`](errors.md) §1).
 - **Heartbeat.** While a run is in flight it fires a `ping` every ~5 s
   (`HEARTBEAT_INTERVAL_MS`) so the run's server‑side state doesn't expire during
   idle gaps (slow model, queued call).
@@ -152,8 +158,9 @@ new ChatAPI({
 Key points:
 
 - **`agentID` must be the agent's SLUG** (`agentId`), not the row id. Passing the
-  cuid gets you `E3101` "agent not found in space". In this app the shell resolves
-  the slug: `const agentSlugID = selectedAgent?.agentId`.
+  cuid gets you `E3101` with the message `agent "<id>" not found in space <spaceId>`
+  — one of several `E3101` refusals, all listed in [`errors.md`](errors.md) §1. In
+  this app the shell resolves the slug: `const agentSlugID = selectedAgent?.agentId`.
 - **`accessToken` is not readonly.** The Keen server verifies it on *every* run
   frame, so a refreshed token must land on the next send without reconnecting — use
   `setAccessToken()`. (See §4.)
@@ -161,8 +168,10 @@ Key points:
   server‑provided `consumer.wsUrl` instead so the endpoint is deployment‑correct.
   On plain http use a `ws://` URL; an `https` deployment must use `wss://`.
   `consumer.wsUrl` is just `process.env.KEEN_WS` — leave it unset and `url` is
-  `undefined`, so the SDK silently falls back to `ws://localhost/ws-keen`: it works
-  on the dev box and closes 1006 from any other device or an https page.
+  `undefined`, so the SDK silently falls back to `ws://localhost/ws-keen`, which
+  never connects to a Keen nginx edge: port 80 only redirects to https, and a
+  WebSocket upgrade doesn't follow redirects (close 1006). Set `KEEN_WS`; the
+  working local values are in [`README.md`](README.md), *A local Keen stack*.
 
 ---
 
@@ -312,10 +321,10 @@ Every default the SDK uses is in `CHAT_SETTINGS`; override per deployment throug
 
 | Constant | Default | Meaning |
 |----------|---------|---------|
-| `WS_URL` | the Keen WebSocket endpoint | default target; override via `ChatAPIOptions.url`. `ws://` on plain http, `wss://` on https. |
+| `WS_URL` | `ws://localhost/ws-keen` | fallback when no `url` is passed. It doesn't reach a Keen nginx edge (port 80 only redirects), so always pass `ChatAPIOptions.url` — `wss://keen.example.com/ws-keen`; local values in [`README.md`](README.md). `ws://` only on plain http, `wss://` on https. |
 | `RESPONSE_TIMEOUT_MS` | 600000 (10 min) | how long `waitFor` waits for a reply. |
 | `RETRY_DELAY_MS` | 1000 | backoff between retries. |
 | `HEARTBEAT_INTERVAL_MS` | 5000 | ping cadence while a run is in flight. |
 | `CONTEXT_BATCH_SIZE` | 15 | max `parallelContext` copies drained per wave. Override per instance with `ChatAPIOptions.contextBatchSize` (positive integer). Raising it past what the Keen server admits at once just meets backpressure (retried), not more throughput. |
-| `INITIAL_MAX_RETRIES` | 10 | bounded retry count for the initial run. |
+| `INITIAL_MAX_RETRIES` | 10 | transport retries for the initial run frame, and response retries for an `initial` node. The initial run frame's *reply* is never retried. |
 | `MAX_FRAME_BYTES` | 8 MB | hard cap on a single outbound frame (see the size guard). |

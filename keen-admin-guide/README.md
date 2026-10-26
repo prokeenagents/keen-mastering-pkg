@@ -72,7 +72,7 @@ through it.
 | "Can an AI agent / a bot log in and help run things?" | Yes — that's an **MCP account** (an agent's own login: ID + secret, no email). Read them the two "pieces" from `00-start-here.md` (MCP account, MCP consumer), then `02-organization.md` → "MCP accounts". |
 | "Where do these consumers I never created come from?" | If they have no email, an AI agent made them: **MCP consumers**. In the console a human can disable, rotate or delete one — never create or assign → `09-consumers.md`. |
 | "How do I make an agent and chat with it?" | `03-spaces-and-agents.md` — explain, create it, then tell them chatting needs a connected client (`05`, `06`) and a deployed project (`04`) — in the Golden path's order (agent = step 2, wiring = 3–10, deploy = 14). Set that expectation up front. |
-| "How are flows built?" | Flows have their **own dedicated instruction** (a separate guide for the flow builder — coming). Here, only mention it: this folder covers *deploying* a built project and *debugging* it, not authoring flows. See `10-flows-and-debugging.md`. |
+| "How are flows built?" | Flows have their **own dedicated guide** — the flow builder's, in `../shira-flow-builder-guide/README.md`. Here, only point to it: this folder covers *deploying* a built project and *debugging* it, not authoring flows. See `10-flows-and-debugging.md`. |
 | "What is this cache / why do I have to do it?" | `00-start-here.md` for the one-breath answer, `07-caches.md` for the rest. Reassure them: **they almost never have to touch it** — it's automatic; the button is a just-in-case. |
 
 Golden rule: **you guide, they click.** You explain the why, name the exact button, and confirm
@@ -97,9 +97,9 @@ KeenAgents is one product with layers that build on each other:
 Organization                 the tenant you administer
   └─ Roles & Accounts        who can do what (permission scopes) and who is on the team
   └─ MCP Accounts            logins for AI agents, not people (ID + secret; used via the Keen MCP server)
-      └─ AI Spaces           a container an agent lives in (has a deployment token)
-          └─ Agents          the runnable unit; identified by a slug; starts from a flow+node
-              └─ Project      the agent's flows/scripts, built and deployed into the space
+  └─ AI Spaces               a container an agent lives in (has a deployment token)
+      └─ Agents              the runnable unit; identified by a slug; starts from a flow+node
+          └─ Project         the agent's flows/scripts, built and deployed into the space
 API access chain             how an outside partner site is allowed to talk to your agents
   Webhook + Client + Certificate + Contract  →  bound to one  →  Api Key  (all four = "fully bound")
 Partner site                 the external website that connects with those credentials
@@ -156,29 +156,49 @@ needs an **MCP account** — a human creates it under Organization → MCP Accou
 1. **Create the Space** → `03-spaces-and-agents.md`. Remember its **Space ID** and its **Deployment
    Token** (both have copy buttons on the space's detail page).
 2. **Create the Agent** → `03-spaces-and-agents.md`. It is created **under / assigned to the space**
-   from step 1. Remember its **Start Flow**, **Start Node**, **agent name** and **Agent ID (slug)**.
-3. **Create the Client Certificate** → `05-api-access.md`. Remember its **ID**.
+   from step 1. Remember its **Start Flow**, **Start Node**, **agent name** and **Agent ID (slug)** —
+   4–60 lowercase letters and single dashes, unique across the organization.
+3. **Create the Client Certificate** → `05-api-access.md` — with a **Secret Key** (16–32 characters
+   or **Generate**). Remember its **ID**.
 4. **Create the Client** → `05-api-access.md`. Remember its **ID + Secret** (the secret is shown once).
 5. **Create the Contract** → `05-api-access.md`. Remember its **ID**.
    - **5.1** On the contract's detail page: in the **Spaces** card tick **Assigned** for the space
-     (step 1) — plus **In-app default** / **Partner default** if new consumers should get it
+     (step 1) — plus **Partner default** if consumers who sign up on the partner site should get it
      automatically — and **Save**; then set the five Yes/No rows in **Registration & Login Policy**
-     (the outside-consumer settings) and **Save**.
-6. **Start the partner site's tunnel:** `ngrok http 3000`, and take the URL it prints
-   (`https://<your-tunnel>.ngrok-free.app` — placeholder).
+     (the outside-consumer settings) and **Save**. (**In-app default** is saved too, but today a
+     consumer created in the console starts with no spaces whatever it says — grant them on that
+     consumer's own Spaces board, `09-consumers.md`.)
+6. **Start the partner site, read its port, tunnel it** (the entanglement project) →
+   `06-connect-a-partner-site.md`.
+   - **6.1** The site **refuses to boot** unless all six `KEEN_*` values are non-empty (`KEEN_HOST`,
+     `KEEN_ORIGIN`, `KEEN_CLIENT_ID`, `KEEN_CLIENT_SECRET`, `KEEN_API_KEY_ID`,
+     `KEEN_API_KEY_SECRET`). So first **create the Api Key** now → `05-api-access.md`: Api → Api
+     Keys → **Create**, a **Name** only (its bindings come in 8.1). Remember its **ID + Secret**
+     (the key is shown once). Then make the site's `.env.local` (copy `.env.example` if it's
+     missing) and fill: the host pair — LOCAL `KEEN_HOST=https://localhost` +
+     `KEEN_WS=wss://localhost/ws-keen`, or SANDBOX `KEEN_HOST=https://<host>` +
+     `KEEN_WS=wss://<host>/ws-keen` (e.g. `keen.example.com`); `KEEN_CLIENT_ID` /
+     `KEEN_CLIENT_SECRET` (4); `KEEN_API_KEY_ID` / `KEEN_API_KEY_SECRET` (this step); and a
+     placeholder `KEEN_ORIGIN=https://pending.local` — step 9 replaces it.
+   - **6.2** Start it: `npm run dev-local` (`npm run dev-local:win` on Windows) against a stack with
+     a self-signed certificate (a local one), or `npm run dev` (`npm run dev:win`) against a host
+     with a trusted certificate — both are dev servers; a production build is `npm run build` then
+     `npm run start`.
+   - **6.3** **Read the port from its output** — the `Local: http://localhost:<port>` line. The site
+     takes 3000 only if 3000 is free, otherwise the next free port (3001, …); on a machine that also
+     runs a local Keen stack's admin console on 3000, 3001 is the normal case. Never assume 3000.
+   - **6.4** Tunnel **that** port: `ngrok http <port>`, and take the URL it prints
+     (`https://<your-tunnel>.ngrok-free.app` — placeholder). This is the `<ngrok URL>` below.
 7. **Create the Webhook** → `05-api-access.md`: **Origin** = `<ngrok URL>`, **Webhook URL** =
    `<ngrok URL>/api/keen-webhook`. Remember its **Webhook ID**.
-8. **Create the Api Key** → `05-api-access.md`. Remember its **ID + Secret** (the key is shown once).
+8. **The Api Key** — already created in 6.1.
    - **8.1** **Bind ALL the resources created so far** to it — the certificate (3), client (4),
-     contract (5) and webhook (7), via the four pickers on the create form (or later on its detail
-     page, then **Save**). The key is now **fully bound**.
-9. **Configure the partner site** (the entanglement project) — put the values into its `.env.local`:
-   `KEEN_HOST` / `KEEN_WS` (local vs sandbox), `KEEN_ORIGIN=<ngrok URL>`, `KEEN_CLIENT_ID` /
-   `KEEN_CLIENT_SECRET` (4), `KEEN_API_KEY_ID` / `KEEN_API_KEY_SECRET` (8). Then run it:
-   `npm run dev-local` (`npm run dev-local:win` on Windows) against a self-signed sandbox, or
-   `npm run dev` against a host with a trusted certificate — both are dev servers; a production
-   build is `npm run build` then `npm run start`.
-   → `06-connect-a-partner-site.md`
+     contract (5) and webhook (7): open the key (Api → Api Keys → the key), set the four pickers
+     and **Save**. The key is now **fully bound**.
+9. **Finish `.env.local` and restart the partner site:** set `KEEN_ORIGIN=<ngrok URL>` — exactly the
+   Webhook's Origin. Then **stop the site and start it again** with the same command as 6.2: it reads
+   its configuration only when it starts, so a running site never sees a `.env.local` change. Keep
+   the ngrok tunnel running — the site behind it is the same. → `06-connect-a-partner-site.md`
 10. **On the Api Key: Rebuild Resource Cache** — the cascade that rebuilds everything bound to the
     key → `07-caches.md`.
     - **10.1 Wake** → `08-wake.md`. The partner site now pulls its configuration.
@@ -191,7 +211,12 @@ needs an **MCP account** — a human creates it under Organization → MCP Accou
 15. **Test prompt** → `../keen-mcp-guide/README.md`.
 
 Afterwards, whenever you change anything bound to the key, repeat **10 → 10.1** (one Rebuild, one
-Wake) — `07-caches.md`, `08-wake.md`.
+Wake) — `07-caches.md`, `08-wake.md`. It is the always-safe routine: after most saves the Rebuild is
+redundant (the copy refreshed itself) but harmless, after a **Webhook** edit it is required, and the
+Wake is the only thing that tells the partner about a space or agent change.
+
+**When the ngrok URL changes** (a free tunnel gets a new URL when it restarts), the URL lives in four
+places and all four move together — `06-connect-a-partner-site.md`, *Watch out for*.
 
 ---
 
@@ -207,7 +232,7 @@ Wake) — `07-caches.md`, `08-wake.md`.
 - **`07-caches.md`** — the served-configuration cache: what, how, why, the admin controls, and the api-key Rebuild that refreshes everything bound to a key in one click.
 - **`08-wake.md`** — the Wake button: what it does, notify-then-fetch, when to use it, and the one-Rebuild-one-Wake sequence.
 - **`09-consumers.md`** — consumers (end users): registration, authentication, self-service; plus MCP consumers (the ones an AI agent makes for itself — humans can disable, rotate or delete them here, not create).
-- **`10-flows-and-debugging.md`** — what flows are (authoring has its own dedicated guide, coming) and source-level debugging.
+- **`10-flows-and-debugging.md`** — what flows are (authoring has its own dedicated guide, `../shira-flow-builder-guide/README.md`) and source-level debugging.
 - **`11-troubleshooting.md`** — the recurring operational gotchas and their fixes.
 - **`12-screen-reference.md`** — a screen-by-screen map of every admin page: the panels, fields, table columns and exact button labels, so you can point someone straight at a control.
 - **`13-deletions.md`** — what happens when you delete each resource: what cascades, what only unbinds, what's protected, and what can't be undone.

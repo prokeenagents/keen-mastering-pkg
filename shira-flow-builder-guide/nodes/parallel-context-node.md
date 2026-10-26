@@ -76,7 +76,9 @@ both Run Flow (shared) and Parallel Flows (empty-isolated):
 - **Merged back per-element.** When the run ends, its **whole final dict** is written back to
   `collection[i]` (path-scoped, so concurrent merges to different indices don't collide).
 - **Session is still shared** — the whole-run `session` is common to all the parallel runs (only the
-  dictionary is windowed).
+  dictionary is windowed). One exception: an **Agent** node inside a clone resolves `${session.*}` against
+  the clone's own fresh session, so it comes back **empty** there — put such values in the element
+  (`{ q: "…", lang: "bg" }` → `${dictionary.lang}`). See `../business-objects.md`.
 
 So inside the template flow (`Project-Start`), treat `dictionary` as "my one element" — read the input
 from it, write your output onto it; whatever it holds at the end becomes that element's result.
@@ -143,4 +145,4 @@ what the template flow costs, and they run at once, so N large runs use N× the 
 
 ---
 
-*Next node: End Flow (`end-flow-node.md`).*
+*Next node: Note (`note-node.md`).*

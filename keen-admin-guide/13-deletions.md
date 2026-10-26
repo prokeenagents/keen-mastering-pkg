@@ -11,16 +11,16 @@ Every delete in the admin is **two-step** (click to arm, click again to confirm)
 
 | You delete… | What happens | Takes with it | Protected? |
 |---|---|---|---|
-| **Account** | that person loses access | nothing else (keys aren't owned by accounts) | the **owner** account can't be deleted |
-| **MCP account** | the AI agent's ID + secret stop working **immediately** | nothing else | — (only a **human** with `mcp_accounts` write can delete one) |
+| **Account** | that person loses access | nothing else (keys aren't owned by accounts) | the **owner** account can't be deleted; an **admin** account only by the owner (never by another admin) |
+| **MCP account** | the AI agent's ID + secret stop working **immediately** | nothing else — its MCP consumers keep working, and any other MCP account with `mcp_consumers` write can manage them | — (only a **human** with `mcp_accounts` write can delete one) |
 | **Role** | the role is removed | nothing — its accounts (human **and** MCP) are **moved to the default role** | **owner / admin / default / developer** roles can't be deleted |
 | **Space** | the space is removed | **all its agents** (and their settings) — a full cascade | — |
 | **Agent** | the agent + its settings are removed | nothing (its space stays) | — |
 | **Api Key** | access is **revoked** immediately | its four bound resources are **unbound, not deleted** | — |
 | **Client / Certificate / Contract** | that record is removed | **unbinds** from any key it was on (key survives, half-wired); a **Contract** also **releases** its consumers and MCP consumers (see below) | — |
 | **Webhook** | that record is removed — but only while **no key holds it** | nothing; the delete is **refused while an api key is bound to it** (unbind it on the key first) | refused while bound |
-| **Consumer** | that end user can no longer sign in (an access token already issued runs until it expires) | nothing | — |
-| **MCP consumer** | the AI agent's consumer credential (ID + secret) stops working **immediately** — no new token, no refresh; an access token already issued runs until it expires | nothing | — (`Delete` on its detail page, two-step, with `mcp_consumers` write; an **MCP account** can delete one via the Keen MCP server too) |
+| **Consumer** | that end user can no longer sign in or refresh (an access token already issued runs until it expires — up to 7 days on today's sandboxes) | nothing | — |
+| **MCP consumer** | the AI agent's consumer credential (ID + secret) stops working **immediately** — no new token, no refresh; an access token already issued runs until it expires (up to 7 days on today's sandboxes) | nothing | — (`Delete` on its detail page, two-step, with `mcp_consumers` write; an **MCP account** can delete one via the Keen MCP server too) |
 
 ## The details worth saying out loud
 
@@ -28,8 +28,8 @@ Every delete in the admin is **two-step** (click to arm, click again to confirm)
 settings. This is intentional and cannot be undone — if you need an agent, move or recreate it
 elsewhere first. This is the scariest delete; always name the agents that will go.
 
-**Api Key → revoke.** Deleting the key cuts off *everything*: direct raw-key calls stop, and — unlike
-Rotate — **outstanding application tokens are revoked too**. The partner is sent a final notice so its
+**Api Key → revoke.** Deleting the key cuts off *everything*: no new application token can be
+obtained with it, and — unlike Rotate — **outstanding application tokens are revoked too**. The partner is sent a final notice so its
 site re-reads and discovers it's been cut off. The four bound resources (client, certificate,
 contract, webhook) are **not** deleted; they simply become free to bind to another key.
 > To truly revoke a partner, **delete the key** (or unbind its certificate/contract). **Rotate does
@@ -58,11 +58,14 @@ doesn't leave its people role-less — their accounts, **MCP accounts included**
 default role**, so they keep a (reduced) set of permissions rather than losing access entirely.
 
 **Account.** Removes that team member's login. Keys and resources aren't owned by an account, so
-nothing else goes with it. The **owner** account is protected and can't be deleted.
+nothing else goes with it. The **owner** account is protected and can't be deleted, and an **admin**
+account can be deleted only by the owner — an admin trying it on another admin is refused.
 
 **MCP account.** Removes an AI agent's login: its ID + secret are **revoked on the spot** — the agent
 can't authenticate through the Keen MCP server from that moment. Nothing else goes with it; an MCP
-consumer belongs to its contract, not to the account that created it. Only a **human** with the
+consumer belongs to its contract, not to the account that created it — its `Created by` still names
+the deleted account, but it keeps working, and any other MCP account with `mcp_consumers` write can
+manage it (humans with that write scope keep their three lifecycle controls). Only a **human** with the
 `mcp_accounts` write scope can delete one — an MCP account can never delete MCP accounts (or anything
 under Accounts / Roles), whatever its role. If you only want to pause the agent, switch **Enabled** off
 instead — that's reversible; delete is not. See `02-organization.md`.
@@ -90,7 +93,7 @@ configuration automatically — you don't rebuild anything. See `07-caches.md`.
 - **Revoke = delete (or unbind), never rotate** — if someone wants to cut a partner off, Rotate is the
   wrong lever; it leaves application tokens working.
 - **Protected records** — the owner account and the owner/admin/default/developer roles can't be
-  deleted; the button won't offer it.
+  deleted; the button won't offer it. An admin account offers `Delete`, but only the owner's works.
 - **Deleting an MCP account is instant and final for the agent** — its secret dies on the spot. Want a
   pause, not an end? Flip **Enabled** off instead.
 - **You can delete an MCP consumer from the console** — `Delete` on its detail page, two-step, with

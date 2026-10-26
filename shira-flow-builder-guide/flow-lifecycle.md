@@ -80,10 +80,11 @@ So "gives" ranges from *a visible answer to the user* to *updated shared data th
 
 - **A node errors** (a Script throws, the LLM provider fails):
   - if the node's **error path is wired** — **Script → Error**, **Agent → Fallback** (on a provider
-    failure) — control takes that path so you can handle it;
+    failure or a broken node configuration) — control takes that path so you can handle it;
   - a **Script**'s failed writes are **rolled back** (its dictionary changes are discarded — all-or-nothing;
     session values it set before the error are kept so an error-handler can read them);
-  - if **nothing handles** the error, that **branch just stops**.
+  - if **nothing handles** the error: a Script's **branch just stops**; an Agent **continues out `next_1`
+    with the error text as its answer** (see `nodes/agent-node.md` → *Fallback*).
 - **It's abandoned / times out** (the user walks away): the run's working memory **expires on its own**
   shortly after — because these objects are **short-lived working memory, not a database**.
 

@@ -1,8 +1,8 @@
 # Flows & debugging
 
 **In one line:** a flow is the step-by-step logic an agent runs. Authoring flows has its **own
-dedicated guide** (separate, coming). Here we cover only what this guide is about: the fact that you
-*can* debug them, and where.
+dedicated guide** (`../shira-flow-builder-guide/README.md`). Here we cover only what this guide is
+about: the fact that you *can* debug them, and where.
 
 ## Flows — just enough
 
@@ -12,8 +12,8 @@ the agent). You build flows in your project and then **deploy** them into a spac
 (`04-deploy-a-project.md`).
 
 **Authoring flows is not covered here.** There is a separate, dedicated guide for the flow builder —
-if a colleague asks "how do I build a flow / what nodes are there / how do I wire them," point them
-to that guide, not this folder.
+`../shira-flow-builder-guide/README.md`. If a colleague asks "how do I build a flow / what nodes are
+there / how do I wire them," point them to that guide, not this folder.
 
 ## Debugging your agent
 
@@ -44,4 +44,5 @@ So the honest split to tell a colleague:
 - **Debuggers are sandbox tooling** — if someone expects to breakpoint a live agent, set the
   expectation: reproduce in a sandbox instead.
 - **Flow authoring lives elsewhere** — this folder deploys and debugs what's built; it does not teach
-  building flows. Use the dedicated flow-builder guide for that.
+  building flows. Use the dedicated flow-builder guide (`../shira-flow-builder-guide/README.md`) for
+  that.

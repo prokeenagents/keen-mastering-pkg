@@ -51,8 +51,8 @@ to be present, but the UI provides no way to set one — treat Join as **configu
 
 ## What a Join node looks like in the `.flow` file
 
-Its `data` is minimal — **no `settings`, no `open`**. Here's the real merge example from the screenshot
-(two Start nodes → one Join → a Jump), which also shows the **edge** shape:
+Its `data` is minimal — **no `settings`, no `open`**. Here's a real merge example (two Start nodes → one
+Join → a Jump), which also shows the **edge** shape:
 
 ```json
 {
@@ -123,4 +123,4 @@ Zero of its own — a pure pass-through that emits its successor and stores noth
 
 ---
 
-*Next node: End Flow (`end-flow-node.md`).*
+*Next node: Assignment (`assignment-node.md`).*

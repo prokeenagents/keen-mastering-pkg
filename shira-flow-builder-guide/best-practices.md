@@ -13,10 +13,13 @@ size between neighbouring nodes.** A node card is **~170px** wide (Parallel Cont
 500), so 1.5× ≈ **255px of empty space** between two cards.
 
 - **Down a chain** (the normal top-to-bottom or left-to-right flow): put successive node **centres about
-  400–450px apart** in the flow direction — that is the ~170px card **plus** the ~255px gap.
-- **Across parallel branches** (a Condition's two edges, a Parallel Flows fan-out): keep neighbouring
-  branches **≥255px apart** on the cross axis so their cards and edges never overlap.
+  400–450px apart** in the flow direction — that is the ~170px card **plus** the ~255px gap. On the grid
+  that is a step of **432px** (27 × 16), which the examples in this guide use.
+- **Across parallel branches** (a Condition's two edges, a Parallel Flows fan-out): keep a **≥255px gap**
+  between neighbouring branches' cards on the cross axis (centres ~432px apart) so their cards and edges
+  never overlap.
 - Snap `x` / `y` to the **16px grid** (the canvas snaps to 16px; keep coordinates on multiples of 16).
+- This is the one spacing rule for the whole guide — `nodes/start-flow-node.md` and the examples follow it.
 
 **Why:** at that spacing the edges stay clear of the node cards, the graph is readable, and a human can
 follow and edit the flow you built. Cramped nodes produce crossing edges and an unreadable canvas — the

@@ -14,7 +14,7 @@ never chats as a consumer.
 
 A consumer record carries: email, an irreversibly-hashed password, first/last name, gender, date of
 birth, a consent flag, the list of **spaces** it may use, a **confirmed** status, and an **external**
-marker (was it created by a partner sign-up, or by an admin invite?).
+marker (set when it came from a partner sign-up; an admin invite leaves it empty).
 
 ## Tenant scoping — the load-bearing rule
 
@@ -37,7 +37,8 @@ a contract.
 
 ## Registration: system vs outside
 
-There are two ways a consumer comes to exist, and the **external** marker records which.
+There are two ways a consumer comes to exist, and the **external** marker records which: it is set
+on partner sign-ups, and **every consumer without it counts as in-app** for the contract's policy.
 
 **Outside registration** is partner-driven and follows a *request → email → confirm* handshake —
 nothing is created until the user proves they own the address:
@@ -56,21 +57,31 @@ nothing is created until the user proves they own the address:
 **System registration** is an **admin invite** from the org console (Ai → Consumers → Create): the
 admin enters the email and picks the **tenant** it belongs to — or none, for a first-party consumer —
 the account is created unconfirmed, an activation mail goes out, and the user sets name + password on
-the confirmation page. An admin-created row carries no sign-up marker either way, so the console shows
-it neither as `Partner sign-up` nor as `In-app`.
+the confirmation page. Two things to know about such a consumer:
+
+- **It is "in-app" for the policy.** It carries no partner sign-up marker, so the contract's two
+  in-app rows — *One-time code — consumers created in-app* and *Freeze in-app-created consumers* —
+  apply to it. (Its detail page shows neither a `Partner sign-up` nor an `In-app` badge — today the
+  `In-app` badge doesn't appear on any consumer, so "no badge" is what in-app looks like.)
+- **It starts with no spaces.** The contract's **In-app default** column is saved but not applied
+  today, so grant its spaces yourself on the consumer's **Spaces** board. (Partner sign-ups *do* get
+  the **Partner default** spaces.)
+
+**MCP consumers** (below) are outside all five policy rows: never a one-time code, never frozen by
+the policy — only the contract's spaces limit them.
 
 ## Authentication (usage level)
 
 Consumer sign-in uses the same **two-token** model as the rest of the partner integration: the
-partner's server holds a long-lived **application token**, the browser holds a short-lived **access
-token**, and both are checked together on every consumer call. Two things an operator should know:
+partner's server holds a long-lived **application token**, the browser holds a per-user **access
+token** that expires (see Refresh below), and both are checked together on every consumer call. Two things an operator should know:
 
 - **One-time passcode.** Where the tenant's policy requires it, login returns a "Verify" challenge and
   emails a **6-digit passcode** instead of signing the user straight in. It's short-lived and
   single-use.
-- **Refresh.** The browser's access token is short-lived by design; the site refreshes it in the
-  background. A refresh **spends** the old refresh token, so the partner serializes refreshes (two at
-  once make one fail).
+- **Refresh.** The browser's access token lasts a limited time (7 days on today's sandboxes); the
+  site refreshes it in the background. A refresh **spends** the old refresh token, so the partner
+  serializes refreshes (two at once make one fail).
 
 The full wire-level detail (headers, the passcode confirm step, refresh semantics) belongs to the
 partner integration — see `06-connect-a-partner-site.md`.
@@ -111,14 +122,17 @@ detail page, where an admin can:
 - **Change its spaces** — a separate spaces board with its own Save (which spaces, within the tenant's
   allowed set, this consumer may use).
 - **Reset Password** — the console offers it only on **confirmed** consumers; it emails a reset and
-  kills any earlier link. (The server itself doesn't check — a reset sent to a `New` consumer through
-  the MCP server would kill its pending confirmation link.)
+  kills any earlier link. (The server itself doesn't check — a reset sent to a `New` consumer by a
+  direct API call, outside the console, would kill its pending confirmation link. The Keen MCP server
+  can't send one at all: MCP accounts can't reset human consumers.)
 - **Delete** — a two-step control.
 
 > **Deleting a contract does not delete its consumers** — they're **released** (they become "orphans":
 > marked as partner sign-ups but with no tenant). The consumer's detail page is where an admin
-> re-assigns each one to a contract. A badge on the page tells an orphan apart from a plain first-party
-> consumer, because "no tenant" means two different things. The contract's **MCP consumers** (next
+> re-assigns each one to a contract. An `Orphan` badge tells a released partner sign-up apart from a
+> plain first-party consumer, because "no tenant" means two different things — but a released
+> consumer that an admin had created carries no sign-up marker, so it shows `No tenant`, exactly like
+> a first-party one. The contract's **MCP consumers** (next
 > section) are released the same way — contract-less, they can't obtain a token until an MCP account
 > assigns them a contract again.
 
@@ -146,7 +160,10 @@ a human token is refused (403) for any of those. The admin console never creates
 under **Ai → MCP Consumers** (right after Consumers; visible with the `mcp_consumers` read scope) you
 get a list and, per consumer, a detail page showing its **ID** (copy button), **name**, **contract**,
 **spaces**, **enabled** state, **last login**, and **created by** — the MCP account that made it.
-Name, contract and spaces are read-only there, and there is **no Create** page. What a human *does*
+(`Created by` is a record, not an owner: **any** MCP account with `mcp_consumers` write can manage
+every MCP consumer in the organization, so when an MCP account is deleted its consumers keep working
+and another MCP account can take them over.) Name, contract and spaces are read-only there, and
+there is **no Create** page. What a human *does*
 get, with the `mcp_consumers` **write** scope, are the three **lifecycle** controls — the same three
 the agent has: the **Enabled** switch (`Save`), **Rotate Secret** (the new secret is shown once; the
 old one stops at once), and **Delete** (two-step confirm).
@@ -155,17 +172,22 @@ old one stops at once), and **Delete** (two-step confirm).
 > agent that made one is the one that knows its purpose and holds its secret, so creation, the
 > contract and the spaces stay with the agent. But a compromised or abandoned consumer must be
 > stoppable **without a bot** — so any admin with write can flip it off, re-key it (the secret the
-> agent stored stops working; it needs the new one) or remove it. Each of those interrupts whatever
-> the agent is in the middle of, so prefer **Enabled** off when you only want a pause.
+> agent stored stops working; it needs the new one) or remove it. Prefer **Enabled** off when you
+> only want a pause. Know how far each one reaches: **Delete** stops any new token and any refresh
+> for good; **Enabled** off does the same for as long as it stays off; **Rotate Secret** only retires
+> the secret — a session the agent already holds keeps refreshing. None of the three stops an access
+> token already issued: it keeps working until it expires (up to 7 days on today's sandboxes). For a
+> compromised consumer, delete it — don't rely on a rotate.
 
 Everything else about tenancy holds for them exactly as for humans: they see only their contract's
 spaces, a space revoked from the contract stops working for them immediately, and they never cross
 tenants.
 
 Moving or unbinding a consumer signs its current session out — the partner site is notified and the user
-logs in again. Whenever an admin changes a consumer's spaces or tenant, the partner is nudged via
-**notify-then-fetch** (`08-wake.md`), and the expected reaction is a **re-login**, since a consumer's
-entitlements are fixed into its session when it signs in.
+logs in again. (The sign-out is the partner site's job: a site that ignores the notice keeps the old
+session until its access token expires.) Whenever an admin changes a consumer's spaces or tenant,
+the partner is nudged via **notify-then-fetch** (`08-wake.md`), and the expected reaction is a
+**re-login**, since a consumer's entitlements are fixed into its session when it signs in.
 
 ## Watch out for
 
@@ -177,7 +199,11 @@ entitlements are fixed into its session when it signs in.
 - **Registration gating is per tenant — there is no org-wide switch.** The tenant's
   outside-registration toggle gates both the *start* and the *completion* of a partner sign-up (it is
   re-checked when the link is redeemed). The one-time passcode is the same: the contract's two OTP
-  flags alone decide, and a consumer with no contract never gets one.
+  flags alone decide, and a consumer with no contract never gets one. "In-app" means every consumer
+  not marked as a partner sign-up — including the ones an admin creates here; MCP consumers are
+  never touched by the OTP or freeze rows.
+- **A consumer you create here starts with no spaces** — the contract's *In-app default* column is
+  not applied today. Grant them on its Spaces board.
 - **Tenant isolation is absolute.** A consumer only ever reaches its own tenant's spaces. A consumer
   who "can log in but nothing works" usually has an **empty space intersection** — compare the tenant's
   allowed spaces against the account's spaces.

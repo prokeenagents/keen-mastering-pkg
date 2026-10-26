@@ -100,7 +100,8 @@ re-runs the agent so it can recover:
   registered **script** tool whose `entry` isn't under `tools/` (or contains `..`), and a **flow** tool whose
   `entry` doesn't resolve to a real start node. Deploy does **not** catch either — check the registry first.
 
-(The **Fallback** edge is only for a real **LLM/provider failure** — see `nodes/agent-node.md`.)
+(The **Fallback** edge is only for a real **LLM/provider failure** or a broken node configuration caught
+before the call — see `nodes/agent-node.md`.)
 
 ---
 
@@ -303,7 +304,7 @@ values in the dictionary. See `business-objects.md`.)
 - **No auto-generated tool list** — the catalogue + the `<SYSTEM CALL>` instruction are **author-written**
   into the System prompt; the engine only parses the block and resolves the name.
 - **Only the first `<SYSTEM CALL>` block runs** per answer.
-- **Tool/parse errors re-loop the agent** (with a synthetic user message); they do **not** take Fallback.
+- **Tool-call errors re-loop the agent** (a `<SYSTEM CALL>` that won't parse, an unknown tool, no tool reply — with a synthetic user message); they do **not** take Fallback.
 
 ---
 

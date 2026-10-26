@@ -3,7 +3,8 @@
 An agent generating a `.flow` must produce something the **canvas** accepts, not just something the engine
 could run. The settings **forms enforce validation**, and re-saving a node on the canvas re-applies it — so
 a value the form would reject can't be authored (and gets stripped if hand-edited then re-saved). This page
-is that ruleset: field validation, which handles accept multiple edges, card sizes, and handle positions.
+is that ruleset: field validation, the handle ids an edge uses, which handles accept multiple edges, card
+sizes, and handle positions. `keen-validate` checks the same rules before a deploy.
 
 ---
 
@@ -13,7 +14,7 @@ is that ruleset: field validation, which handles accept multiple edges, card siz
 |---|---|
 | **Start** · Label | `/^[A-Z][a-zA-Z]*$/` — capital first, **letters only**, ≤ 60. |
 | **Condition** · Condition | **required, ≤ 150** chars (an expression; use `${dictionary.*}`/`${session.*}` — see `nodes/condition-node.md`). The engine itself has no length cap — the 150 is the form's. |
-| **Loop** · Read from / Set to | each **required, ≤ 120**; **Read from ≠ Set to**. The form does **not** check the `dictionary.` / `session.` prefix — that is an **engine-time** rule (a bare name saves fine and throws when the loop runs; see `nodes/loop-node.md`). |
+| **Loop** · Read from / Set to | each **required, ≤ 120**; **Read from ≠ Set to**. The form does **not** check the `dictionary.` / `session.` prefix — that is an **engine-time** rule (a bare name saves fine on the canvas and throws when the loop runs; `keen-validate` rejects it — see `nodes/loop-node.md`). |
 | **Assignment / Script** · Key/Value Pairs | **≤ 10 pairs**; key ≤ 100, value ≤ 200; **duplicate keys rejected**. |
 | **Script** · Script path | must **end `.js`**, ≤ 160. |
 | **Run Flow / Jump Flow / Flow Pointer** · Flow | `/^[A-Z][a-zA-Z]*-[A-Z][a-zA-Z]*$/` — **two capitalized letters-only words joined by a hyphen** (a `File-Label`), ≤ 120. **No digits, no `${}`.** |
@@ -21,14 +22,40 @@ is that ruleset: field validation, which handles accept multiple edges, card siz
 | **Agent** · Agent ID | `/^[a-z]+(-[a-z]+)*$/` — **kebab-case, letters only** (no digits, no `${}`), 4–60. |
 | **Agent** · Agent Name | 4–60 chars (no regex — `${…}` allowed). |
 | **Agent** · Session ID / Request ID | no regex, **≤ 60** each — `${…}` allowed; leave blank normally. |
-| **Agent** · Prompt turns | content **non-empty**; **≤ 20 turns**; **turn 1 is forced to role `system`**; other turns toggle user↔assistant. Each saved as `{ id, role, content }`. |
+| **Agent** · Prompt turns | content **non-empty**; **≤ 20 turns**; **turn 1 is forced to role `system`**; other turns toggle user↔assistant. Each saved as `{ id, role, content }` — the form mints a UUID `id` for a turn that has none (the engine tolerates a missing `id`, but write one so the file matches what the canvas saves). |
 | **Note** · Label | the note text, 1–160. |
 
-> **Important nuance on "interpolated" target/id fields.** The engine *does* interpolate the Run/Jump/
-> Parallel entry name and the Agent's `agentId` at runtime (`${dictionary.*}`/`${session.*}` resolve) —
-> **but the canvas forms above reject `$ { } .`**, so you **cannot author a dynamic value on the canvas**.
-> In practice treat these as **literals** (a real `File-Label`, a real slug). A dynamic value would have to
-> be hand-edited into the JSON and would be **stripped the next time that node's form is saved**.
+> **Important nuance on "interpolated" target/id fields.** The engine *does* interpolate the Run / Jump /
+> Flow Pointer target and the Agent's `agentId` at runtime (`${dictionary.*}`/`${session.*}` resolve; a
+> Parallel Context pipe is **not** interpolated) — **but the canvas forms above reject `$ { } .`**, and
+> `keen-validate` enforces the same rules as errors. In practice treat these as **literals** (a real
+> `File-Label`, a real slug). A dynamic value written into the JSON fails validation and is **stripped the
+> next time that node's form is saved**.
+
+> **Digits in a flow file name.** The file name (and the agent's Start Flow) may contain digits
+> (`/^[A-Z][A-Za-z0-9]*$/`), but a `File-Label` target is letters only, so a node or a flow tool can never
+> target `Report2.flow`. Name flow files **letters-only PascalCase**; `keen-validate` warns on a digit.
+
+## Handle ids — what goes in an edge's `sourceHandle` / `targetHandle`
+
+Write the **canvas** handle id of each dot. The deploy compiler renames four of them onto the engine's
+routing keys; everything else passes through unchanged:
+
+| Node | Out (`sourceHandle`) | In (`targetHandle`) | Compiler renames |
+|---|---|---|---|
+| Start | `next` | — | `next` → `next_1` |
+| Flow Pointer | `next` (into a Parallel Flows `wait`) | — | `next` → `next_1` |
+| Condition | `true`, `false` | `in` | `true` → `next_1`, `false` → `next_2` |
+| Loop | `out` (body), `next_1` (Finish) | `in`, `next_2` (Next — the body's return) | `out` → `next_2` |
+| Agent (LLM) / Script | `next_1`, `error` | `in` | — |
+| Assignment / Run Flow / Join / Parallel Context | `next_1` | `in` | — |
+| Parallel Flows | `next_1` | `in`, `wait` | — |
+| End / Jump Flow | — | `in` | — |
+| Note | — | — | — |
+
+So `next_1` **is** a canvas id for most nodes — write it. What you must not do is write the engine key
+in place of one of the four renamed ids (`next_1` on a Start, `next_1` / `next_2` on a Condition, `next_2`
+for a Loop body): `keen-validate` rejects a handle that isn't in the node's canvas set.
 
 ## Which `in` handles accept **multiple** incoming edges (multi-in)
 

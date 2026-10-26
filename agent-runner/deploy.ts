@@ -15,6 +15,10 @@
  *   --deploy-token/ KEEN_DEPLOY_TOKEN  the space's deployment token
  *   --project     / KEEN_PROJECT_DIR   the flow project ROOT (the folder with src/)
  *   --json                             NDJSON output for the agent
+ *
+ * Only what ms-deploy builds is uploaded — flows/, scripts/ and keen-tools.json —
+ * and never a dot-entry (.env, .vscode/keen.json, .git …), so a mis-pointed
+ * project dir can't ship secrets.
  */
 import 'dotenv/config';
 
@@ -46,6 +50,11 @@ function parseArgs(argv: string[]): Args {
         if (!token.startsWith('--')) {
             continue;
         }
+        const eq = token.indexOf('=');
+        if (eq > 2) {
+            args[token.slice(2, eq)] = token.slice(eq + 1); // --key=value
+            continue;
+        }
         const key = token.slice(2);
         const next = argv[i + 1];
         if (next === undefined || next.startsWith('--')) {
@@ -58,10 +67,38 @@ function parseArgs(argv: string[]): Args {
     return args;
 }
 
+/** Bad arguments / configuration — exit 2, nothing was sent. */
 function fail(message: string): never {
     process.stderr.write(`agent-runner deploy: ${message}\n`);
     process.exit(2);
 }
+
+const USAGE = `deploy.ts — push a flow project live (step 2 of the build loop:  keen-validate  →  keen-deploy / deploy.ts  →  run.ts).
+
+USAGE
+  npx tsx deploy.ts [--json] [flags]          # everything else from .env in the working dir
+
+CONFIG (flag first, then .env; --key value or --key=value)
+  --host         / KEEN_HOST          the bare Keen host, e.g. keen.example.com (deploy base: https://<host>/ms/deploy)
+  --space        / KEEN_SPACE_ID      the AI space id
+  --deploy-token / KEEN_DEPLOY_TOKEN  the space's deployment token
+  --project      / KEEN_PROJECT_DIR   the flow project ROOT — the folder that holds src/ (default: .)
+  --json                              NDJSON output for the agent
+  -h --help                           this help
+
+WHAT IS UPLOADED
+  <root>/src (or <root> itself when it has no src/) must hold flows/. Only flows/, scripts/
+  and keen-tools.json are zipped; dot-entries (.env, .vscode, .git …), node_modules and
+  .zip files never are.
+
+EXIT CODES
+  0  deployed
+  1  rejected by the platform, or the connect / upload failed (network, TLS, HTTP status)
+  2  bad arguments / configuration (nothing was sent)
+
+For a self-signed dev cert, prefix the command with NODE_TLS_REJECT_UNAUTHORIZED=0.
+Full docs: agent-runner/docs/DEPLOY.md
+`;
 
 // ------------------------------------------------------------------ emit
 
@@ -80,27 +117,33 @@ function makeEmitter(json: boolean) {
 
 // ------------------------------------------------------------------ zip
 
+/** The root entries ms-deploy builds (builder/build-project.ts) — nothing else is uploaded. */
+const UPLOAD_ROOT = new Set(['flows', 'scripts', 'keen-tools.json']);
+
 /**
  * Zip the given directory's CONTENTS (so flows/ + scripts/ land at the zip
  * root) with fflate — pure JS, in-memory, so it works identically on Windows /
- * macOS / Linux with no external `zip`. Skips node_modules/.git anywhere, the
- * deploy's own scanning/uploads staging at the root, and stray .zip files.
+ * macOS / Linux with no external `zip`. Takes only UPLOAD_ROOT at the top level
+ * and skips every dot-entry (.env, .vscode, .git …), node_modules and stray .zip
+ * files at any depth. Returns the skipped root entries so the caller can say so.
  */
-async function zipDir(dir: string): Promise<Buffer> {
+async function zipDir(dir: string): Promise<{ zip: Buffer; skipped: string[] }> {
     const files: Record<string, Uint8Array> = {};
+    const skipped: string[] = [];
 
     async function walk(current: string): Promise<void> {
         for (const entry of await readdir(current, { withFileTypes: true })) {
             const full = join(current, entry.name);
             const rel = relative(dir, full).split(sep).join('/'); // posix paths inside the zip
 
+            if (current === dir && !UPLOAD_ROOT.has(entry.name)) {
+                skipped.push(entry.name);
+                continue;
+            }
+            if (entry.name.startsWith('.') || entry.name === 'node_modules') {
+                continue;
+            }
             if (entry.isDirectory()) {
-                if (entry.name === 'node_modules' || entry.name === '.git') {
-                    continue;
-                }
-                if (rel === 'scanning' || rel === 'uploads') {
-                    continue;
-                }
                 await walk(full);
             } else if (entry.isFile() && !entry.name.endsWith('.zip')) {
                 files[rel] = new Uint8Array(await readFile(full));
@@ -109,7 +152,7 @@ async function zipDir(dir: string): Promise<Buffer> {
     }
 
     await walk(dir);
-    return Buffer.from(zipSync(files, { level: 9 }));
+    return { zip: Buffer.from(zipSync(files, { level: 9 })), skipped: skipped.sort() };
 }
 
 // ------------------------------------------------------------------ http
@@ -128,8 +171,14 @@ async function post(url: string, headers: Record<string, string>, body?: BodyIni
 
 // ------------------------------------------------------------------ main
 
+const jsonOut = process.argv.includes('--json');
+
 async function main(): Promise<void> {
     const args = parseArgs(process.argv.slice(2));
+    if (args.help === true || process.argv.includes('-h')) {
+        process.stdout.write(USAGE);
+        process.exit(0);
+    }
     const json = args.json === true;
     const emit = makeEmitter(json);
 
@@ -163,10 +212,15 @@ async function main(): Promise<void> {
     // B1: KEEN_PROJECT_DIR is the project ROOT. If it has a src/ subdir, zip its
     // CONTENTS (so flows/ + scripts/ land at the zip root); otherwise zip the root
     // directly (back-compat). One value serves both keen-validate (wants the root)
-    // and deploy.
+    // and deploy. Either way it must hold flows/ — refused here, before anything
+    // is sent, so a wrong dir (e.g. the runner's own, with its .env) never uploads.
     const srcDir = join(projectDir, 'src');
     const srcStat = await stat(srcDir).catch(() => null);
     const zipRoot = srcStat?.isDirectory() ? srcDir : projectDir;
+    const flowsStat = await stat(join(zipRoot, 'flows')).catch(() => null);
+    if (!flowsStat?.isDirectory()) {
+        fail(`no flows/ in ${zipRoot} — --project / KEEN_PROJECT_DIR must be the flow project ROOT (the folder that holds src/flows)`);
+    }
 
     // 1) connect — the deploy token + space authenticate; we get a short-lived session token.
     emit('meta', { step: 'connect', base, space: spaceId });
@@ -188,8 +242,8 @@ async function main(): Promise<void> {
     let code = 0;
     try {
         // 2) zip + 3) upload — synchronous: the reply is the deploy outcome.
-        emit('meta', { step: 'zip', root: projectDir, zipping: zipRoot });
-        const zip = await zipDir(zipRoot);
+        const { zip, skipped } = await zipDir(zipRoot);
+        emit('meta', { step: 'zip', root: projectDir, zipping: zipRoot, ...(skipped.length > 0 ? { skipped } : {}) });
         emit('meta', { step: 'upload', bytes: zip.length });
 
         const form = new FormData();
@@ -221,4 +275,14 @@ async function main(): Promise<void> {
     setTimeout(() => process.exit(code), 50);
 }
 
-main().catch(err => fail(err instanceof Error ? (err.stack ?? err.message) : String(err)));
+// A thrown error here is the network / TLS / runtime failing mid-deploy (fetch
+// rejects) — exit 1 like any other failed deploy; 2 stays for bad arguments.
+main().catch(err => {
+    const message = err instanceof Error ? (err.cause instanceof Error ? `${err.message}: ${err.cause.message}` : err.message) : String(err);
+    if (jsonOut) {
+        process.stdout.write(JSON.stringify({ t: 'fail', step: 'request', error: message }) + '\n');
+    } else {
+        process.stderr.write(`agent-runner deploy: ${message}\n`);
+    }
+    process.exit(1);
+});

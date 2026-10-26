@@ -60,16 +60,20 @@ project yet, so a deploy won't pick it up.
 - The flow is then addressed as **`File-Label`** — file name, a dash, the start label. Example: a file
   `Simo.flow` with a start node labelled `Next` is the entry **`Simo-Next`**.
 - **The Label is a static identifier — not a value.** `${dictionary.*}` / `${session.*}` placeholders
-  do **not** work here: the regex forbids `$ { } .`, and the engine reads the label as an **entry key**
-  at deploy time — *before* any dictionary or session exists — and the Start node never reads it at
-  runtime (`StartNode.execute` is a pure pass-through). Runtime interpolation applies only to **value**
-  fields (Agent prompts, Script props, Condition / Assignment expressions), never to **addressing**
-  fields like this Label or a Run / Jump / Parallel flow target.
+  do **not** work here: the regex forbids `$ { } .`, and the deploy compiler reads the label as an
+  **entry key** — *before* any dictionary or session exists — and the Start node never reads it at
+  runtime (it is a pure pass-through). (A Run / Jump / Flow Pointer target, by contrast, *is* interpolated
+  by the engine, but its form and `keen-validate` accept only a literal letters-only `File-Label` — see
+  `../field-rules.md`.)
+- **Name the flow file letters-only.** The file name may contain digits (`/^[A-Z][A-Za-z0-9]*$/`, the
+  same rule as the agent's Start Flow), but every `File-Label` target is letters only — so `Report2.flow`
+  can be an agent's start flow, yet no Run / Jump / Flow Pointer / Parallel Context node or flow tool can
+  ever target it. `keen-validate` warns on a digit in a flow file name.
 
 ## What a Start node looks like in the `.flow` file
 
-You **don't hand-edit this** — the canvas writes it when you Save + save the file — but seeing the shape
-makes the fields click. A Start node in a `.flow` document:
+On the canvas path the canvas writes this when you Save + save the file. A building agent writes the same
+JSON **by hand** — so match this shape exactly. A Start node in a `.flow` document:
 
 ```json
 {
@@ -95,7 +99,7 @@ makes the fields click. A Start node in a `.flow` document:
 
 | Field | Value / rule | What it is |
 |---|---|---|
-| `id` | `startNode_` + **12** letters/digits | the node's unique id — always this prefix; generated, never set by hand |
+| `id` | `startNode_` + **12** letters/digits | the node's unique id — always this prefix; the canvas generates it, and when you write the file by hand you generate 12 random characters yourself (unique in the file) |
 | `type` | `"startNode"` | the node kind — **mandatory**; how the engine knows to run it as a Start |
 | `position` | `{ x, y }` | where the card sits on the canvas — standard from the React Flow plugin ([reactflow.dev](https://reactflow.dev/)); cosmetic |
 | `data.label` | your **Label** (e.g. `Start`) | the entry name you typed in the settings form |
@@ -108,7 +112,8 @@ makes the fields click. A Start node in a `.flow` document:
 | `edges` (file level) | `[]` until you wire the *out* dot | the connections between nodes — standard React Flow; the canvas fills it as you wire |
 
 > The `.flow` file keeps **only** `{ nodes, edges }` at the top level. If you hand-add any other top-level
-> key it's dropped the next time you edit on the canvas — so treat the canvas as the source of truth.
+> key it's dropped the next time the file is edited on the canvas (and `keen-validate` warns about it) —
+> so write only what the canvas would save.
 >
 > The `id`'s 12 characters are `A–Z a–z 0–9`, `crypto`-random; the `<type>_` prefix is **load-bearing**
 > — the engine derives the node kind from it (`getNodeType` substring-matches `startNode` in the id).
@@ -138,10 +143,10 @@ label is "out"). Dragging from it to the next node's input writes an **edge** in
   `data`, no `markerEnd`. Include `"type": "step"` when authoring an edge by hand.
 
 > **`next` vs `next_1` — don't mix them up.** In the `.flow` file the Start out handle is **`next`**.
-> The running engine routes on **`next_1`**; that rename is done by the **deploy/compile** step (the VS
-> Code extension's export), **not** by you. Author with the raw handle id **`next`** — never write
-> `next_1` into the file. (This is why the mental model in the README talks about `next_1`: that's the
-> engine's view, one step downstream of what you author.)
+> The running engine routes on **`next_1`**; that rename is done by the **deploy compiler** on the server,
+> **not** by you. On a Start node write the canvas id **`next`** — never `next_1`. (Most other nodes' out
+> dot *is* `next_1` on the canvas too; only Start / Flow Pointer `next`, Condition `true` / `false` and the
+> Loop body `out` get renamed. The full table: `../field-rules.md` → *Handle ids*.)
 
 ## Size on the canvas & the snap grid (build precisely)
 
@@ -164,8 +169,10 @@ An agent placing nodes needs two numbers: **how big a node is** and **what the g
 
 - Keep every `position.x` / `position.y` a **multiple of 16** (e.g. `208`, `176`, `384`) so nodes sit
   exactly where the canvas would snap them.
-- A card is **170px** wide (≈ 11 grid cells). For a left-to-right chain, step **x by ~256px** (16 cells)
-  per node; for stacked branches step **y by ~112–160px**. That keeps an on-grid gap with no overlap.
+- A card is **170px** wide (≈ 11 grid cells). **Spacing follows the rule in `../best-practices.md` →
+  *Canvas layout*:** step successive nodes **~432px** (27 cells) apart along the chain, and keep
+  neighbouring branches at least that far apart on the cross axis, so every gap between cards is ≥ 1.5× a
+  card. Overlap-free is not enough — the graph has to stay readable.
 - The **out** dot sits at the bottom by default. The Rotate control moves it to another side and stores
   that as `data.handlePosition` — **cosmetic only**: it changes where the dot renders, never the wiring.
 

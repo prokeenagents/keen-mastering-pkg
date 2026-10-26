@@ -21,7 +21,8 @@ export const CHAT_SETTINGS = {
      * mixed content; `ws://` is only for plain-http local dev. The public path is
      * `/ws-keen` (`wss://<your-keen-host>/ws-keen`).
      *
-     * The browser's Origin must be allow-listed on the api_key, or the server
+     * The browser's Origin must equal the origin of a webhook record bound to an
+     * api_key (the server's allow-list is those origins, exact match), or the server
      * refuses the upgrade and the WS closes 1006 with no explanation.
      */
     WS_URL: 'ws://localhost/ws-keen',

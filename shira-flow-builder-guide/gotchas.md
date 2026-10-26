@@ -34,22 +34,26 @@ Ordered by how much pain they cause, deepest first.
 ### A3. For a script tool, the bare `flowContext` is the TOOL's session — not the agent's
 - **Symptom:** you used `flowContext.sessionId` for the reply; still "No tool response."
 - **Cause:** a script tool runs with its **own fresh** session/request ids on the bare `flowContext`
-  global. `flowContext.sessionId` ≠ the calling agent's session. (`flowContext.parentSessionId` is not
-  populated on the tool's node either.)
-- **Fix:** the agent's session is on **`toolOptions.agentNode.flowContext.sessionId`** — use that, never
-  `flowContext.sessionId`, for the reply.
+  global. `flowContext.sessionId` ≠ the calling agent's session. (The caller's session *is* on the bare
+  global too, as **`flowContext.parentSessionId`** — the engine stamps it on every tool flow and the
+  reference clients forward it on each node call — but it is the same value as the path below.)
+- **Fix:** the agent's session is on **`toolOptions.agentNode.flowContext.sessionId`** (= `flowContext.parentSessionId`)
+  — use that, never `flowContext.sessionId`, for the reply.
 
-### A4. Nested flow tool — `toolOptions` may not survive the inner agent's tool loop
-- **Symptom:** a flow tool with an inner agent works up to the inner tool call, then can't return to the
-  outer/main agent.
-- **Cause:** inside the flow tool `toolOptions` points to the **outer** agent (M) — but the inner agent A
-  runs **its own** tool loop, whose re-dispatch carries `options: { toolResponse, promptMarker }`, which
-  can **overwrite** the flow tool's `{ toolContext, agentNode: M }` for the node **after** A. So a return
-  step placed after A may no longer see `toolOptions.toolContext.agentId`.
-- **Fix:** **capture M's identity into the dictionary at the FIRST node** (where `toolOptions` still points
-  to M): `dictionary.mainAgentId = toolOptions.toolContext.agentId; dictionary.mainSession = toolOptions.agentNode.flowContext.sessionId;`
-  then read them back at the return node. The dictionary survives A's loop. See `building-tools.md`
-  Example C.
+### A4. Nested flow tool — where `toolOptions` is NOT there
+- **Symptom:** a flow tool's return step can't find the outer/main agent (M) — `toolOptions` is
+  `undefined` there.
+- **Cause:** inside the flow tool `toolOptions` points to **M** on every node of the flow tool — the
+  flow-engine copies the inbound pack onto same-flow continuations, and the reference clients (test
+  harness, entanglement, agent-runner) re-seed every nodeTask of a `toolFlow` bundle from `flow.options`.
+  The inner agent A's own tool loop does **not** overwrite it: `{ toolResponse, promptMarker }` rides only
+  on A's re-dispatch to itself. The pack is **absent** in a **Run Flow / Parallel** sub-flow spawned from
+  inside the tool flow (spawned bundles don't inherit `options`), and with a **custom client** that does
+  not re-seed.
+- **Fix:** **capture M's identity into the dictionary at the FIRST node** — a defensive bridge that covers
+  both cases: `dictionary.mainAgentId = toolOptions.toolContext.agentId; dictionary.mainSession = toolOptions.agentNode.flowContext.sessionId;`
+  then read them back at the return node. The dictionary is shared across the tool flow and its Run Flow
+  children. See `building-tools.md` Example C.
 
 ### A5. A nested inner agent needs a trigger, or it errors (E6002)
 - **Symptom:** the inner agent of a flow tool throws "at least one user message" (E6002) instead of
@@ -91,13 +95,16 @@ Ordered by how much pain they cause, deepest first.
 - **Symptom:** a registered tool isn't found.
 - **Cause:** the runtime registry is the **compiled** `flows/init.map.js` (built from `keen-tools.json` at
   **deploy**), not the file directly — or the `!*tool` name ≠ the registry `name`.
-- **Fix:** re-**deploy** (Connect → Upload) after editing `keen-tools.json`; match the name exactly.
+- **Fix:** re-**deploy** (`keen-deploy`, or Connect → Upload in the extension) after editing
+  `keen-tools.json`; match the name exactly.
 
-### A11. Tool/parse errors re-loop the agent — they don't take Fallback
+### A11. A bad tool call re-loops the agent — it doesn't take Fallback
 - **Symptom:** you wired the Agent's Fallback edge for tool failures; it never fires.
 - **Cause:** a bad `<SYSTEM CALL>`, unknown tool, or "tool pushed nothing" all re-loop the agent with a
   corrective user message. **Fallback fires only on a provider/LLM-call failure** (auth, rate-limit,
-  timeout, 4xx/5xx) — or a config error (missing agentId/agentName/llm).
+  timeout, 4xx/5xx) — or a config / payload error raised before the call (`E6101`: missing
+  agentId/agentName/llm, unknown provider or model; `E6002`: no user message). Unwired, those continue on
+  `next_1` with the error text as the answer (A12).
 - **Fix:** for tool-shape problems, make the tool **self-correcting** (reply with what's missing). Reserve
   Fallback for provider failures.
 
@@ -152,7 +159,9 @@ Ordered by how much pain they cause, deepest first.
 - **Symptom:** LoopNode "invalid value/setto"; Parallel Context does nothing.
 - **Cause:** Loop `value`/`setto` and Parallel Context `contextCollection` are **path references** that
   must start with `dictionary.` (or `session.` for Loop). A bare name resolves to nothing / throws.
-- **Fix:** use `dictionary.items`, not `items`.
+- **Fix:** use `dictionary.items`, not `items`. Point a Loop's **Read from** at the dictionary: a
+  `session.<key>` source is accepted, but a session value is always a primitive (`data-model.md`), so
+  that loop goes straight to Finish. A `session.<key>` **Set to** works only for primitive elements.
 
 ### B4. Assignment: a plain `"1"` stays the **string** `"1"`
 - **Symptom:** a later `${dictionary.n} > 25` compares wrong / is always false.
@@ -189,8 +198,10 @@ Ordered by how much pain they cause, deepest first.
 
 ### C2. Dynamic `${}` flow targets are blocked by the canvas form
 - **Symptom:** you want a Run/Jump/Flow-Pointer target computed at runtime.
-- **Cause:** the engine *would* interpolate it, but the form regex (`^[A-Z][a-zA-Z]*-[A-Z][a-zA-Z]*$`)
-  rejects `$ { } .`. A hand-edited dynamic value is stripped on the next canvas save.
+- **Cause:** the engine *does* interpolate a Run / Jump / Flow Pointer target (not a Parallel Context
+  pipe), but the form regex (`^[A-Z][a-zA-Z]*-[A-Z][a-zA-Z]*$`) rejects `$ { } .` and digits, and
+  `keen-validate` applies the same rule as an error. A hand-written dynamic value fails validation and is
+  stripped on the next canvas save.
 - **Fix:** treat flow targets as **literal** `File-Label`s.
 
 ### C3. Join is a pass-through, not a barrier
@@ -217,11 +228,24 @@ Ordered by how much pain they cause, deepest first.
 - **Cause:** non-object elements are replaced with `{}` before each run — a run over `[1,2,3]` sees `{}`.
 - **Fix:** wrap scalars: `[{v:1},{v:2}]`.
 
-### C8. Condition / Loop handles — the compiler owns the mapping
-- **The rule:** author the raw canvas handle ids (`true` / `false` on a Condition, `out` on a Loop body,
-  `next` on a Start) — the **deploy compiler** maps them onto the engine's routing keys
-  (`true`→`next_1`, `false`→`next_2`, `out`→`next_2`, `next`→`next_1`). **Never write `next_1` /
-  `next_2` into a `.flow`**; the compiler owns this mapping.
+### C8. Write the canvas handle ids — the compiler renames four of them
+- **The rule:** an edge's `sourceHandle` is the **canvas** handle id of that dot. For most nodes that id
+  already **is** `next_1` (Agent, Script, Assignment, Run Flow, Join, Parallel Flows, Parallel Context, and
+  a Loop's Finish), plus `error` on Agent / Script. Only four canvas ids differ from the engine's routing
+  keys, and the **deploy compiler** renames them: Start / Flow Pointer `next`→`next_1`, Condition
+  `true`→`next_1` and `false`→`next_2`, Loop body `out`→`next_2`.
+- **Don't pre-compile:** never write `next_1` / `next_2` on a Condition, `next_2` for a Loop body, or
+  `next_1` on a Start / Flow Pointer. `keen-validate` rejects a `sourceHandle` that isn't one of the
+  node's canvas ids, and the canvas wouldn't draw it. The full table is in `field-rules.md` → *Handle
+  ids*.
+
+### C9. A digit in a flow file name makes the flow untargetable
+- **Symptom:** `Report2.flow` works as an agent's Start Flow, but no Run / Jump / Flow Pointer / Parallel
+  Context node and no flow tool can reach it.
+- **Cause:** the flow file name and the agent's Start Flow allow digits (`/^[A-Z][A-Za-z0-9]*$/`), but
+  every `File-Label` target is letters only (`/^[A-Z][a-zA-Z]*-[A-Z][a-zA-Z]*$/`), and so is a Start label.
+  `keen-validate` warns on a flow file name with digits.
+- **Fix:** name flow files letters-only PascalCase (`ReportTwo.flow`).
 
 ---
 
@@ -266,9 +290,10 @@ Ordered by how much pain they cause, deepest first.
 ## E. Project, deploy & testing
 
 ### E1. `keen-tools.json` / any change needs a re-deploy
-- **Cause:** the runtime registry compiles at deploy; a local edit isn't live until Upload succeeds and
-  the engine cache swaps. Auto-sync only re-uploads **while the extension stays connected**.
-- **Fix:** Connect → Upload after edits; watch for "Cache swapped" in the logs.
+- **Cause:** the runtime registry compiles at deploy; a local edit isn't live until the upload succeeds
+  and the engine cache swaps. In the extension, auto-sync only re-uploads **while it stays connected**.
+- **Fix:** re-deploy after edits — `keen-validate` → `keen-deploy` (it answers `deployed` / `rejected`),
+  or Connect → Upload in the extension; watch for "Cache swapped" in the logs.
 
 ### E2. Test tool changes in a **new chat**
 - **Symptom:** after fixing a tool, the same chat still shows "No tool response".
@@ -282,7 +307,8 @@ Ordered by how much pain they cause, deepest first.
 ### E4. Deploy the whole project together
 - **Cause:** flows, scripts and the registry compile as one bundle; a partial change can leave the runtime
   referencing something that isn't there.
-- **Fix:** upload the whole `src/` (the panel does this); don't hand-patch one file on the server.
+- **Fix:** upload the whole `src/` (`keen-deploy` and the panel both do this); don't hand-patch one file
+  on the server.
 
 ---
 

@@ -4,9 +4,9 @@
 
 Проект:
 
-- `/home/n-ministation/Desktop/Building`
-- source root: `/home/n-ministation/Desktop/Building/src`
-- Space / project id: `cmtcyly8d0000ph010iu5cen6`
+- `<project-root>`
+- source root: `<project-root>/src`
+- Space / project id: `<space-id>`
 
 ## 1. Каква беше задачата
 
@@ -222,7 +222,7 @@ Runtime логовете потвърдиха границите на тези �
 - return script-ът успява чрез dictionary bridge-а;
 - веднага след него `AgentOne` се изпълнява отново и дава финалния отговор.
 
-За директно визуално виждане на bare global-а може да се сложи breakpoint и да се гледа `global.toolOptions` в debugger-а. Работещият код не зависи от това дали той е absent или е заменен — return bridge-ът е устойчив и в двата случая.
+За директно визуално виждане на bare global-а може да се сложи breakpoint и да се гледа `global.toolOptions` в debugger-а. Работещият код не зависи от това дали pack-ът е налице или липсва (Run Flow под-flow, custom client) — return bridge-ът е устойчив и в двата случая.
 
 ## 6. Трите различни session-а
 
@@ -564,40 +564,42 @@ Deployed `flows/init.map.js` съдържа:
 Deployed `CountryInfo.flow.map.js` съдържа:
 
 ```js
-"CountryInfo-Start": "startNode_CiStartA1B2C"
+"CountryInfo-Start": "startNode_<12-char-id>"
 ```
 
 Това потвърждава, че flow tool entry-то се resolve-ва към реален Start node.
 
 ## 16. Реалната успешна runtime следа
 
-Последният успешен trace използва correlation id:
+Последният успешен trace използва един correlation id за целия run:
 
 ```text
-95454769-1aa3-4643-8605-0fa77dbf9246
+<correlation-id>
 ```
 
-Основните identities бяха:
+Основните identities бяха шест различни id-та (стойностите не се пазят тук):
 
 ```text
 AgentOne root flowId:
-9e76f46e-3fab-4743-9ee4-bfb8618c3ab5
+<root-flow-id>
 
 AgentOne root sessionId:
-r-9d6b63bf-f515-4a95-8675-ed6e0224c876
+r-<root-session-id>
 
 CountryInfo flowId:
-fbdd0e4e-9ba7-47ef-8464-70ccce33e087
+<country-info-flow-id>
 
 CountryInfo / CountryAgent sessionId:
-9a538d53-a9d3-41b2-bba6-20f1acb70445
+<country-info-session-id>
 
 Country Lookup virtual tool flowId:
-7b760fed-841b-4b33-9a27-a5f3f714dc17
+<lookup-tool-flow-id>
 
 Country Lookup own tool sessionId:
-1c3900d1-4035-4c5a-85b8-74844e78c4a4
+<lookup-tool-session-id>
 ```
+
+Важното е, че трите session id-та са различни — точно картата от §6.
 
 Редът в логовете беше:
 

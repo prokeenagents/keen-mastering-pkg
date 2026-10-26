@@ -17,7 +17,7 @@ A flow does not run from your working copy — the platform runs the **deployed*
 5. **Monitor** — read `run.ts`'s output (with `--json` everything is on stdout; in human mode the trace is on stdout and the runner's own notes go to stderr): the live `onStream` progress **and** the flow-tree (which node ran, its `request → response`, the LLM answer, any `E….` error code).
 6. **Fix → back to 1.**
 
-The whole config is **nine core values** in **`.env`** — the Keen host, identity (token, user id, email, origin), the one space + agent, the deploy token, and the project dir (plus a few optional ones — `KEEN_CHAT_ID`, `KEEN_COOKIES`, `KEEN_TLS_INSECURE` — listed in `.env.example`). Fill it once (copy `.env.example`); the three tools read the same file, so each iteration is just the three commands (add `--prompt` to `run.ts`). Every URL derives from `KEEN_HOST` (WS `wss://<host>/ws-keen`, deploy `https://<host>/ms/deploy`). See [docs/VALIDATE.md](./docs/VALIDATE.md), [docs/DEPLOY.md](./docs/DEPLOY.md) and [docs/USAGE.md](./docs/USAGE.md).
+The whole config is **nine core values** in **`.env`** — the Keen host, identity (token, user id, email, origin), the one space + agent, the deploy token, and the project dir (plus a few optional ones — `KEEN_CHAT_ID`, `KEEN_COOKIES`, `KEEN_TLS_INSECURE`, `KEEN_PROMPT` — listed in `.env.example`). Fill it once (copy `.env.example`); the three tools read the same file, so each iteration is just the three commands (add `--prompt` to `run.ts`). Every URL derives from `KEEN_HOST` (WS `wss://<host>/ws-keen`, deploy `https://<host>/ms/deploy`). See [docs/VALIDATE.md](./docs/VALIDATE.md), [docs/DEPLOY.md](./docs/DEPLOY.md) and [docs/USAGE.md](./docs/USAGE.md).
 
 ```bash
 # one-time
@@ -54,8 +54,8 @@ Both read `.env` from the **current working directory**, so run them from a dir 
 ### Install the runner
 
 ```bash
-cd ~/Desktop/"Keen Mastering"/agent-runner
-npm install     # run.ts + the ChatSDK (TaskQueue) only
+cd agent-runner     # from the package root (the folder that holds .claude/ and bin/)
+npm install         # run.ts + the ChatSDK (TaskQueue) only
 ```
 
 ## Run
@@ -85,12 +85,16 @@ npx tsx run.ts \
 {"t":"stream","event":"token","data":{"text":"Analyzing the offer…"}}                   // live progress (a stream frame carries no requestId)
 {"t":"stream","event":"token","data":{"text":"<SYSTEM CALL>load_offers</SYSTEM CALL>"}}
 {"t":"meta","line":"run complete — 1 flow bundle(s)"}
-{"t":"flow","flowId":"<cid>_<sessionId>_<flowId>","flowTask":{…},"nodeTasks":[{ /* the node's request */ "flowContext":{…}, "nodeContext":{"kind":"scriptNode","id":"…"}, "response":{ /* output / error code */ } }]}
+{"t":"flow","flowId":"<cid>_<sessionId>_<flowId>","endReached":true,"flowTask":{…},"nodeTasks":[{ /* the node's request */ "flowContext":{…}, "nodeContext":{"kind":"scriptNode","id":"…"}, "response":{ /* output / error code */ } }]}
+{"t":"summary","ok":true,"flows":1,"endReached":1}                                      // always last; "error" added when ok is false
 ```
 
 - `t:"stream"` — every `onStream` frame (engine → user progress, token text, `<SYSTEM CALL>` directives); `event` is one of `thinking` / `processing` / `progress` / `token` / `error`, `data.text` carries the text. The **live** view.
 - `t:"flow"` — one per flow bundle in the returned tree; `flowId` is the bundle key `<cid>_<sessionId>_<flowId>`. Each `nodeTasks[]` entry IS the node's request (`flowContext` + `nodeContext` + `options?`) plus its `response` (output / error code). The **structural** view — which node ran, in → out, what failed.
-- `t:"meta"` — runner notes (connect, completion, failures). Exit code `0` success · `1` failed run · `2` bad args · `130` cancelled with Ctrl+C.
+- `t:"flow"` `endReached` — `true` when the flow's End node answered `{ final: true }`; `false` when an unwired output ended it. Exit `0` alone does not tell you the flow reached End.
+- `t:"summary"` — the last line: `ok`, how many flow bundles, how many reached End, and `error` on a failure (the partial tree is printed before it).
+- Credentials are printed as `"<redacted>"` (the SDK stamps the live `access_token` on every bundle), and stdout holds only these lines — SDK console output goes to stderr.
+- `t:"meta"` — runner notes (connect, completion, failures). Exit code `0` the run settled · `1` failed run · `2` bad args · `130` cancelled with Ctrl+C.
 
 ## The two channels
 
@@ -101,8 +105,8 @@ npx tsx run.ts \
 
 ## Three things the environment must give you
 
-1. **An allow-listed `--origin`.** The Keen server silently drops any WS whose `Origin` is not on the api_key's list (a Node client sends none). Pass `--origin <the api_key's origin>` — it is your partner site's origin, the one configured on the "Application Key".
-2. **A valid consumer `--token`.** Token is the only auth — there is no login step. The headless way: an MCP account creates an **MCP consumer** and calls `get_mcp_consumer_token` on the Keen MCP server → its `access_token` is `KEEN_TOKEN` and the consumer's `id` is `KEEN_USER_ID` (see `../keen-mcp-guide/README.md`). The manual way: copy the consumer `access_token` from the consumer app's browser cookies (open the app logged in as the consumer → DevTools → Application → Cookies) and set `KEEN_TOKEN`. An **absent** token → the runner prints the browser-cookie steps (the manual way — it does not mention the MCP path) and exits `2`; a **wrong/expired** token → `run FAILED: Invalid token` (the Keen server, E3002).
+1. **An allow-listed `--origin`.** The relay's allow-list is the set of origins on the **webhook records bound to fully-bound api_keys** (key + client + certificate + contract + webhook; exact match; a missing `Origin` is refused — and a Node client sends none). An Origin not on it gets the upgrade refused (`Unexpected server response: 502` through the nginx edge). Pass `--origin <your partner site's origin>` — the origin on the webhook record bound to its api key. The token's `origin` claim must match it too.
+2. **A valid consumer `--token`.** Token is the only auth — there is no login step. The headless way: an MCP account creates an **MCP consumer** and calls `get_mcp_consumer_token` on the Keen MCP server → its `access_token` is `KEEN_TOKEN` and the consumer's `id` is `KEEN_USER_ID` (see `../keen-mcp-guide/README.md`). The manual way: copy the consumer `access_token` from the consumer app's browser cookies (open the app logged in as the consumer → DevTools → Application → Cookies) and set `KEEN_TOKEN`. An **absent** token → the runner prints both ways (MCP first) and exits `2`; a **wrong/expired** token → `run FAILED: Invalid token` (the Keen server, E3002).
 3. **`--user-id <consumerId>`.** The consumer token seals its `sub`/`email` inside `hash` (only the Keen server's cert secret opens it), so the runner cannot read them. The Keen server enforces `userContext.userId === token.sub`, so pass the consumer's id explicitly. **`--email` is presence-only** — the Keen server requires it non-empty but does not match it, so any value works (default: the token's `email` claim if present, else pass one).
 
 **Verified end-to-end:** a real consumer token + allow-listed origin + `--user-id` ran a full flow against `agent-one` — the runner streamed the live tokens ("Hello! How can I help you today?") and printed the whole flow-tree: `startNode → scriptNode(init.js) → agentNode(AgentOne, anthropic/claude-opus-4-5) → endNode(final)`, each node with its `request → response`. Exit 0.

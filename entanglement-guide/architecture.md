@@ -99,14 +99,17 @@ return (
 `getConsumerData()` returns one bundle (`Keen.ConsumerData`) — the raw cookie
 tokens (`accessToken`, `refreshToken`), the decoded token payload, the spaces the
 consumer is entitled to (the cached space list ∩ the token's `space` claim), every
-agent across those spaces, and `wsUrl` (from `KEEN_WS`).
+agent across those spaces, and `wsUrl` (from `KEEN_WS`). `ConsumerProvider` is a
+client component, so this whole bundle — both tokens included — is serialized to
+the browser (§4).
 Provider order matters: `NoticeProvider` sits **above** `EventsProvider` because
 the events loop hands `notice.show` to its handlers, so the dialog must already be
 mounted.
 
 **Step 2 — a server page reads server‑only data and passes it down as props.**
 E.g. the chat page reads `consumerData` on the server and hands it to a client
-`Content` component, which mounts the chat UI:
+`Content` component, which mounts the chat UI. Props of a `'use client'` component
+are serialized into the page, so what is passed here is no longer server‑only:
 
 ```tsx
 // src/app/(app)/space/[id]/[agentID]/[chatID]/page.tsx
@@ -139,12 +142,18 @@ owns the live `ChatAPI` and the conversation for one thread — see
 These are Next route handlers that run **on the server** (`runtime = 'nodejs'`) so
 they can reach the connector singleton and the httpOnly cookies. They are the only
 things that see the partner credentials; the browser only ever sees these local
-URLs. The raw session tokens are a different story: browser JS can never read the
-httpOnly *cookies*, but `getConsumerData()` returns `accessToken` + `refreshToken`
-and the `(app)` layout hands that whole bundle to the client‑side
-`ConsumerProvider`, so both tokens are in the client bundle. The access token is
-needed there (it stamps every WS frame); the refresh token is not — the provider's
-own comment recommends stripping it in the layout.
+URLs. The raw session tokens are a different story. Browser JS can never read the
+httpOnly *cookies*, but their values leave the server anyway: `getConsumerData()`
+(`keen.tools.ts`) returns `accessToken` **and** `refreshToken`, and that whole
+bundle goes to client components — the `(app)` layout passes it to the
+`'use client'` `ConsumerProvider`, and the chat page passes it as the
+`consumerData` prop to its client `Content` → `ChatShell`. React serializes those
+props into the page's RSC payload, so both tokens are readable by any script on an
+`(app)` page. The access token is needed there (ChatShell stamps every WS frame with
+it); the refresh token is not — nothing on the client reads it, and the provider's
+own comment says to strip it in the layout. Until a copy of the site does, an XSS on
+any `(app)` page can lift the refresh token the cookie was meant to hide (its cookie
+lives 4 weeks).
 
 **Auth / session**
 
@@ -187,14 +196,15 @@ own comment recommends stripping it in the layout.
 | Route | Method | Purpose |
 |-------|--------|---------|
 | `/api/events` | GET | The long‑poll the browser holds open to receive pushes. |
-| `/api/keen-webhook` | POST | Receiver for org→site webhooks (a consumer/space/agent changed org‑side). |
+| `/api/keen-webhook` | POST | Receiver for org→site webhooks (a consumer/space/agent changed org‑side, and the certificate itself). **No sender check** — see §5. |
 | `/api/keen-callback` | POST | Stub receiver for consumer self‑service completion callbacks (Keen POSTs `{ action, consumer, apikeyID, contractKey }` to whatever `X-Callback-Url` a redeem/update carried). entanglement does **not** pass a `callbackUrl` on any redeem/update today, so this route only logs; wire it by passing `callbackUrl` to the connector's redeem / `update` calls. |
 
 The chat/consumer routes are registered in `AUTH_API_CONFIG`; the proxy 404s any
 `/api/*` not listed there, and paths are kept **flat** because the allow‑list is an
 exact match (ids/filters ride query params or the body, never a dynamic segment).
 Three routes bypass the allow‑list entirely — `/api/keen-webhook`,
-`/api/keen-callback` and `/api/logout` are passed straight through, so Keen can
+`/api/keen-callback` and `/api/logout` are passed straight through (no session, no
+readiness check, no sender check), so Keen can
 reach the receiver and a user can sign out while Keen is down — and, for a
 signed‑in caller, every other `/api/*` answers **503** ("Keen connection is not
 ready.") until the connector is ready.
@@ -223,9 +233,19 @@ browser holds GET /api/events open ◀── woken by the bus ──────
       `result: { cert, key }` (the public PEM + the shared AES secret). It is the
       only channel that ever delivers `key`; the receiver calls
       `setCertificate(cert, key)`. Without it the connector never becomes
-      `isReady` and every page stays on `/maintenance`. (`r_cert` inside an
-      array re‑runs the certificate claim/redeem; `r_cert_delete` clears it.)
-    - `r_api_keys` — the api_key changed → a full `reconnect()`.
+      `isReady` and every page stays on `/maintenance`. Keen sends it on every
+      certificate **redeem** — the connector's own boot step (below) — and on a
+      WAKE.
+    - `['r_cert']` as an **array** is what Keen sends when a certificate is
+      updated or rotated. The receiver calls `fetchCertificateRetrier()`, but
+      after boot that is a no‑op: the claimed code and the "redeemed" flag from
+      the first redeem are still set (only `reconnect()` clears them), so the
+      site keeps the **old** certificate until a WAKE, an `r_api_keys` push or a
+      restart.
+    - `r_cert_delete` — clears the certificate and marks the connector inactive
+      (every page to `/maintenance`) until the next `reconnect()`.
+    - `r_api_keys` — the api_key changed → a full `reconnect()`: the site is not
+      ready again until the re‑redeemed certificate lands.
     - `r_consumer_policy` — re‑fetch the consumer contract **and** the live
       policy; `r_consumer_policy_delete` — clear both and deactivate.
     - `r_json` — re‑fetch the front settings of every cached agent (and publish
@@ -254,9 +274,64 @@ browser holds GET /api/events open ◀── woken by the bus ──────
     connector before the notice fires.
 
 The bus is a per‑process, in‑memory singleton — correct for a single‑node
-self‑hosted deployment; scaling out would require a shared pub/sub behind it.
+self‑hosted deployment; scaling out would require a shared pub/sub behind it. A
+broadcast reaches every browser whose poll is parked at that moment; one that finds
+no poll parked is queued, and the first browser to poll next takes it — the others
+never see it.
 
 > Why a forced logout rather than a silent refresh on a space/entitlement change:
 > a consumer's entitlements live in the session token, so only a fresh login
 > re‑mints them. `space-change` therefore just *notifies*; the Keen server stays
 > the authority on what a given consumer may actually see on the next render.
+
+### Boot order: how the certificate arrives
+
+`instrumentation.ts` creates the connector when the server starts, and
+`connect()` runs three steps, each retried every 2 s until it lands:
+
+1. `POST /keen-api/auth/application_token` — the partner credentials.
+2. `GET /keen-api/resources/certificate` — a single‑use code (120 s TTL on Keen).
+3. `POST /keen-api/resources/certificate` with that code — the **redeem**. Keen
+   checks the code, then ms-api-keys POSTs
+   `{ 'synch-data': 'r_cert', result: { cert, key } }` to the `webhook` URL of the
+   record bound to the api_key. The redeem's own reply carries no certificate.
+
+`tryActivate` then waits (logging `[BOOT] Application activated: FALSE` every 2 s)
+until that webhook has stored the certificate, sets `isReady`, and reads the
+consumer contract, the policy and the space list.
+
+So **a restart needs no WAKE**: the boot redeem itself triggers `r_cert`. A WAKE is
+needed only when that delivery is lost — the `webhook` URL doesn't reach this site
+(wrong URL, tunnel down) or the one POST failed (Keen sends it once, 5 s timeout, no
+retry). The connector counts the redeem as done and never redeems again by itself,
+so it waits until a WAKE (which pushes `r_cert` directly) or a restart.
+
+### Who may call `/api/keen-webhook`: no sender check
+
+Keen does not sign these POSTs — ms-api-keys sends a plain JSON body with only a
+`Content-Type` header. This release of the site checks nothing either: the proxy
+passes `/api/keen-webhook` through with no session and no allow‑list, and the
+handler acts on whatever body arrives. Anyone who can reach the URL can push
+`r_cert` with their own `{ cert, key }` (the key the site then verifies sessions
+with and opens sealed links with), `r_cert_delete` (the site drops to
+`/maintenance`), or a consumer‑targeted kind with any `consumer.id` (a forced
+logout). The path is fixed, so it is no secret.
+
+Before a copy of the site is reachable from the internet, make the URL the shared
+secret: a route such as `/api/keen-webhook/<secret>` that compares the segment with
+a server‑only env value in constant time and answers 401 on a mismatch, registered
+in full as the record's `webhook`. Restricting the path to the Keen platform's
+egress addresses adds a second layer.
+
+### A WAKE in open browsers
+
+A WAKE's array carries `r_space`, `r_agent` and `r_json`, so besides re‑filling the
+caches it publishes two broadcast events: `space-change` (shown as "Agent changed",
+since `r_agent` is in the array) and then `agent-front-settings-change` ("Agent
+settings updated"). Every signed‑in browser with a parked poll raises the blocking
+notice for the first; the second replaces its text if the dialog is still open
+(`notice.show` swaps the content of the one dialog) or opens it again if the user
+already dismissed it. The same array's `r_api_keys` makes the connector
+`reconnect()`: until the re‑redeemed certificate lands, page navigations go to
+`/maintenance` and signed‑in `/api/*` calls answer 503. So every WAKE interrupts
+every live user — prefer it on a site nobody is using, or for recovery.

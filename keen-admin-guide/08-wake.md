@@ -20,9 +20,14 @@ site's copy correct even if a notice is delayed or missed, because the fetch is 
 Some changes fire a notice on their own, without Wake:
 - editing a contract's name / key / spaces / defaults / policy → the partner is notified to re-read
   its contract and policy;
-- creating, editing or rotating the key's certificate, client, or the key itself → the partner is
-  notified to re-read its key resources (a certificate change also carries the new material);
-- deleting an API key → a final notice so the partner re-reads and discovers it's been revoked.
+- editing or rotating the key's client, or creating, editing (re-binding) or rotating the key
+  itself → the partner is notified to re-read its key resources;
+- editing or rotating the key's certificate → the partner is notified that its certificate changed.
+  The notice carries **no** material — the site fetches it again through the certificate handshake
+  (`06-connect-a-partner-site.md`; the reference site does this on its own), or you press **Wake**,
+  which delivers it;
+- deleting an API key (or its bound client, certificate or contract) → a final notice so the
+  partner re-reads and discovers what it lost.
 
 Changing a **space**, an **agent**, or an agent's **front settings** fires **no notice at all** —
 those are exactly the changes Wake exists for (`07-caches.md`: two clicks on the key's page).
@@ -60,7 +65,8 @@ spaces, its certificate, or its client — you no longer visit each record's pag
 (so there is something new to fetch), **Wake second** (so the partner fetches it). Wake alone is
 enough after a normal Save — the copy already refreshed itself — and it is the *only* thing that
 tells the partner about a space or agent change; the cascade is for when you want to be certain
-everything the partner reads is fresh at once.
+everything the partner reads is fresh at once. **After a Webhook edit the Rebuild is not optional**:
+the new Origin / URL reach the served copy only through it.
 
 ## What Wake does NOT do
 

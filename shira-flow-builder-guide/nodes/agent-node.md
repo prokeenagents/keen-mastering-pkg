@@ -77,7 +77,7 @@ full; past tool turns are dropped as noise.)
 | **LLM Selection** | `llm.company` (e.g. `anthropic`, `google`) + `llm.model` (e.g. `claude-opus-4-5`); the UI also stores an internal `llm.modelId`. | ❌ literal |
 | **Sampling: Temperature *or* Top p** | pick **one** — Temperature (0–2) or Top p (0–1). Stored under `llm.parameters`. | ❌ |
 | **Max Tokens** | the answer length cap (`llm.parameters.maxTokens`). | ❌ |
-| **Effort** | for reasoning-capable models — **low / medium / high** thinking effort. | ❌ |
+| **Effort** | for reasoning-capable models — the thinking effort the model declares (e.g. **low / medium / high**, plus **max** on `claude-opus-4-7`; per model in the table below). | ❌ |
 | **Special Rules → Interact with DB** | ON by default. **OFF** adds `specialRules: [{type:'skip-internal-database-interactions'}]` — the turn is **not** loaded from / saved to chat history (a transient sub-agent). | ❌ |
 | **Special Rules → Use tools** | ON by default. **OFF** adds `specialRules: [{type:'skip-internal-tooling'}]` — the engine **won't** parse `<SYSTEM CALL>` blocks, so the agent can't call tools (its raw text is the answer). | ❌ |
 
@@ -113,22 +113,26 @@ Notes for building a `.flow`:
 - **Anthropic**: `temperature` and `top_p` are **mutually exclusive** — set one, not both.
 - **Reasoning knob names differ by provider** (`effort` / `reasoningEffort` / `thinkingLevel`) — the panel
   shows the right control per model; when hand-authoring, use the knob the model actually declares **and
-  only the values the engine accepts**: Anthropic `effort` = low/medium/high/max (or 0/1/2 = low/medium/high)
-  and it is sent **only** for `claude-opus-4-5*` / `claude-opus-4-7`; Google `thinkingLevel` = LOW/HIGH (or
-  0/1) on Gemini 3 — any other value is dropped and Gemini 3 then defaults to HIGH — while Gemini 2.5 takes a
-  numeric `thinkingBudget`; OpenAI `reasoningEffort` = none/minimal/low/medium/high/xhigh on the reasoning
-  SKUs (`o1`, `o4-mini`, `gpt-5.4*`, `gpt-5.5`).
+  only the values in the table above** (what the model declares *and* the engine sends): Anthropic
+  `effort` is sent **only** for `claude-opus-4-5*` (low/medium/high, or 0/1/2) and `claude-opus-4-7`
+  (low/medium/high/max); Google `thinkingLevel` = LOW/HIGH (or 0/1) on Gemini 3 — any other value is
+  dropped and Gemini 3 then defaults to HIGH — while Gemini 2.5 takes a numeric `thinkingBudget`; OpenAI
+  `reasoningEffort` = low/medium/high on `o1` / `o4-mini` and none/low/medium/high/xhigh on `gpt-5.4*` /
+  `gpt-5.5`. (The engine's parser also passes `max` for any Anthropic model and `minimal` for OpenAI, but no
+  registered model declares them — `max` on opus-4-5 or `minimal` anywhere is left to the provider to
+  reject.)
 - **Don't just default to Anthropic** — pick the provider/model that fits (cost, speed, reasoning). A
   cheap `gemini-*-flash` or `gpt-4o-mini` is fine for a simple tool agent; a reasoning model for hard
   planning.
 
 The LLM configuration is **literal** — placeholders don't apply to model/params/rules. **Effort** maps to
-the model's **reasoning** knob and is **provider-specific**: Anthropic uses `effort` low/medium/high/max,
-sent **only** for `claude-opus-4-5*` and `claude-opus-4-7` and silently ignored on every other Anthropic
-model (including opus-4-6 and sonnet-4-6); OpenAI reasoning models (`o1`, `o4-mini`, `gpt-5.4*`, `gpt-5.5`)
-use `reasoningEffort` (and a separate completion-token cap); Google uses `thinkingLevel` LOW/HIGH on Gemini 3
-(other values are dropped → HIGH) and a numeric `thinkingBudget` on Gemini 2.5. The engine applies a knob
-only where that provider path supports it and ignores it otherwise.
+the model's **reasoning** knob and is **provider-specific**: Anthropic uses `effort`, sent **only** for
+`claude-opus-4-5*` (low/medium/high) and `claude-opus-4-7` (low/medium/high/max) and silently ignored on
+every other Anthropic model (including opus-4-6 and sonnet-4-6); OpenAI reasoning models (`o1`, `o4-mini`,
+`gpt-5.4*`, `gpt-5.5`) use `reasoningEffort` with the values in the table (and a separate completion-token
+cap); Google uses `thinkingLevel` LOW/HIGH on Gemini 3 (other values are dropped → HIGH) and a numeric
+`thinkingBudget` on Gemini 2.5. The engine applies a knob only where that provider path supports it and
+ignores it otherwise.
 
 ---
 
@@ -158,8 +162,9 @@ this is the heart of multi-step agents.
 
 The **Fallback** (`error`) dot fires when the **LLM/provider call fails** — e.g. **auth error**
 (bad/missing API key), **rate-limit / capacity**, **timeout**, an upstream **4xx/5xx**, or a transport
-error — **and** when the node's **configuration is broken** (missing `agentId` / `agentName` / `llm`, i.e.
-`E6101`). Both route to **Fallback** (if you wired it). (A provider failure is also **recorded** to the
+error — **and** when the node's **configuration is broken** (missing `agentId` / `agentName` / `llm`, an
+unknown provider or model — `E6101`; no user message to answer — `E6002`). Both route to **Fallback** (if
+you wired it). (A provider failure is also **recorded** to the
 chat history as the answer; a pre-call config error is not.)
 
 It does **NOT** fire for:
@@ -256,7 +261,8 @@ Edges carry `"type": "step"` + `{ id, source, sourceHandle, target, targetHandle
 - **Leave Session/Request ID blank** unless you deliberately need a custom chat slot.
 - **The tool catalogue + `<SYSTEM CALL>` instruction are yours to author** in the System prompt — the
   engine doesn't add them.
-- **Fallback = provider failure only**, and only if wired — an empty/refusal answer is a normal `Out`.
+- **Fallback = a provider failure or a broken node configuration** (`E6101` / `E6002`), and only if wired
+  — a bad `<SYSTEM CALL>` re-loops the agent, and an empty/refusal answer is a normal `Out`.
 - **"Use tools" OFF disables tool calls**; **"Interact with DB" OFF** makes the turn stateless (no history).
 
 ## ⏱ Performance
@@ -266,4 +272,4 @@ so keep tools purposeful and prompts tight. Max Tokens caps the answer size.
 
 ---
 
-*Tool calling in depth: `../tool-calling.md`. Next node: Note (`note-node.md`).*
+*Tool calling in depth: `../tool-calling.md`. Next node: Parallel Flows (`parallel-flows-node.md`).*

@@ -12,7 +12,13 @@ SDK references (every `chat.d.ts` anchor below) live in entanglement's `src/@typ
 agent-runner does not ship them, `tsx` runs the SDK untyped. The
 canonical prose already exists and this document **consolidates** it rather than
 reinventing it — read those as companions, but note the `file:line` anchors here are the
-**agent-runner** copy (line numbers differ slightly from the Test WS React tree):
+**agent-runner** copy (line numbers differ slightly from the Test WS React tree).
+
+> **Not in this package.** The companion docs below, `HOW_TO_USE.md`, and the server-side
+> anchors (`relay.gateway.ts` = the Keen relay's source) live in the maintainers' repos; they are
+> cited for provenance only. `chat.d.ts` is in the reference partner site —
+> `/keen-entanglement-download` puts it at `<site>/src/@types/chat.d.ts`. Everything this
+> document claims is checkable against `agent-runner/sdk/` alone.
 
 | Existing doc | Covers |
 |---|---|
@@ -656,8 +662,8 @@ never reintroduce a counter.
 
 ### 7.4 Integrity checks (client-side)
 
-The endNode **4-id match** (`isEndOfFlowSignal`, `:939`) and the spawned-children
-**`parentFlowId` match** (`:773`). The Keen server's *per-frame* cid anti-spoof (rejecting a `run`
+The endNode **4-id match** (`isEndOfFlowSignal`, `:950`) and the spawned-children
+**`parentFlowId` match** (`:784`). The Keen server's *per-frame* cid anti-spoof (rejecting a `run`
 whose cid doesn't match the socket) is **server-side** and not in these SDK files.
 
 > **Visualizer selection key is `(nodeId, requestId)`, not nodeId alone [D§13]** — the same
@@ -836,7 +842,7 @@ import ChatAPI from './sdk';
 const chat = new ChatAPI({
     spaceID:     'test-space',
     agentID:     'agent-one',
-    userId:      'cmnbrajfm0000mz7wd39jj0r9',   // MUST equal the access_token's `sub`
+    userId:      '<consumer-id>',               // MUST equal the access_token's `sub`
     email:       'consumer@example.com',
     accessToken: '<real consumer JWT>'          // verified per message; not a dev no-op
     // url    → defaults to CHAT_SETTINGS.WS_URL

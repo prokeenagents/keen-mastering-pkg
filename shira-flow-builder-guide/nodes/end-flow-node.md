@@ -50,7 +50,7 @@ dict it no longer needs at its End, and terminating eagerly reclaims that memory
 for the TTL. For a normal small flow you can leave it off — the 60 s TTL cleans up anyway.
 
 > It only affects the **dictionary that belongs to this flow** — not the session, not another flow's
-> dictionary. (This matches your note: "the dictionary that pertains to the node['s flow]".)
+> dictionary.
 
 ## What an End node looks like in the `.flow` file
 
@@ -101,5 +101,4 @@ wide fan-outs, negligible otherwise.
 
 ---
 
-*Node pages so far: Start, End, Condition, Loop, Run Flow, Jump Flow, Join, Assignment, Parallel Context,
-Parallel Flows, Flow Pointer. Still to come: Script, Agent (LLM), Note.*
+*Next node: Condition (`condition-node.md`).*

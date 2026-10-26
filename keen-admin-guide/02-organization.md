@@ -170,7 +170,10 @@ What makes it different from a human account:
   use the MCP server at all, without deleting anything. Turn it back on to let it in again. Save.
 - **Rotate Secret** — mints a **new** secret and shows it once (the same one-time panel). The **old
   secret stops working immediately**, so hand the new one to the agent straight away. Use it when a
-  secret leaks or was lost — there is no "show me the secret again."
+  secret leaks or was lost — there is no "show me the secret again." A rotate only retires the
+  secret: a session already signed in with it keeps renewing itself. If the secret **leaked**,
+  delete the account and create a fresh one (new ID + secret) — that ends every session at once;
+  switching **Enabled** off blocks such a session only for as long as it stays off.
 - **Delete** — two-step (Delete → Confirm). Revokes the credential on the spot: no new sign-in and no
   token refresh will succeed (a token the agent already holds runs out on its own within about a
   minute).
@@ -209,8 +212,9 @@ work. Humans with the `mcp_accounts` scopes manage MCP accounts (see above).
 Four roles ship with every organization and **cannot be deleted**: **owner**, **admin**, **developer**,
 **default**. Of these, `owner`/`admin`/`default` can't be edited at all; `developer` allows permission
 edits but keeps its title locked. `default` is also the landing role for anyone whose role was deleted.
-Owner and admin **accounts** are protected too — an admin can't act on an owner or another admin, and
-even the owner can't change the owner account's role.
+Owner and admin **accounts** are protected too — an admin can't act on an owner or another admin
+(no reset, no delete, no role change), only the owner can reset or delete an admin account, and even
+the owner can't change the owner account's role.
 
 ## Watch out for
 
@@ -226,13 +230,15 @@ even the owner can't change the owner account's role.
   credential — a reset kills it and the reset link refuses unconfirmed accounts, stranding the person.
   The button is hidden on New accounts for exactly this reason.
 - **Protected roles and accounts can't be removed.** owner/admin/developer/default roles have no
-  Delete; owner and admin accounts are shielded from lower requesters.
+  Delete; the owner account has no Delete either, and an admin account can be reset or deleted only
+  by the owner — an admin trying it on another admin is refused.
 - **Deleting a role moves its accounts silently** to `default` — MCP accounts included — and signs
   those people out. Check who holds a role before deleting it.
 - **Names are the user's, not yours.** First/last name are set at confirmation and can't be edited from
   the admin surface — the person edits their own under avatar menu → **Account**.
 - **An MCP account's secret is shown once** — at creation and after each **Rotate Secret**. Lost it?
-  Rotate; the old one dies the moment you do, so pass the new one on immediately.
+  Rotate; the old one dies the moment you do, so pass the new one on immediately. Leaked it? Delete
+  and re-create the account — a rotate alone doesn't end a session already open with the old secret.
 - **An MCP account's name is unique and can't be changed.** A duplicate name is refused at create; a
   typo means delete and re-create (new ID, new secret) — so name it carefully.
 - **MCP accounts can't manage MCP accounts** (or people, or roles), no matter their role. If a bot

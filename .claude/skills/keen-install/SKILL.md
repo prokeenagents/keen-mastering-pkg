@@ -8,7 +8,7 @@ allowed-tools: Bash Read AskUserQuestion
 Set up this toolkit on this machine. Work from the package root (the folder that holds this `.claude/`). Nothing is compiled — the tools ship prebuilt in `bin/`. Do every step, report what you did, and stop at the first hard failure with the exact error and what the person must install.
 
 ## 1. Prerequisites — check, don't assume
-Run and report versions: `node --version` (18+), `npm --version`, `ngrok version`, `claude --version`. Go is NOT required. A missing one is a stop: tell the person exactly what to install (Node from nodejs.org, ngrok from ngrok.com/download) and end.
+Run and report versions: `node --version` (20+ — the runner uses the global `crypto`, `fetch`, `FormData`), `npm --version`, `ngrok version`, `claude --version`. Go is NOT required. A missing one is a stop: tell the person exactly what to install (Node from nodejs.org, ngrok from ngrok.com/download) and end.
 
 ## 2. Pick the prebuilt binaries for THIS machine
 Detect the platform: `uname -s` (Linux / Darwin; on Windows use `$env:OS` / `systeminfo`) and `uname -m` (`x86_64` ⇒ `amd64`, `aarch64`/`arm64` ⇒ `arm64`). The matching files are:

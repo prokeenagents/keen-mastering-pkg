@@ -13,8 +13,8 @@ The Keen **MCP server** is the door an AI agent uses to *configure* Keen without
 | | **LOCAL** (answer was `localhost`) | **SANDBOX** (answer was a real host, e.g. `keen.example.com`) |
 |---|---|---|
 | Keen host | `https://localhost` | `https://<host>` |
-| MCP endpoint | `https://localhost/mcp` (or directly `http://localhost:5545/mcp`) | `https://<host>/mcp` |
-| Chat WebSocket — entanglement (`KEEN_WS`) | `ws://localhost:5520/ws` (the relay's direct port; reachable only from a plain-http page) | `wss://<host>/ws-keen` |
+| MCP endpoint | `https://localhost/mcp` (a local *development* stack also publishes it directly on `http://localhost:5545/mcp`) | `https://<host>/mcp` |
+| Chat WebSocket — entanglement (`KEEN_WS`, opened by the **browser**) | `wss://localhost/ws-keen` (through the local nginx edge — open `https://localhost` once in that browser and accept the self-signed certificate, or the socket closes 1006 with no reason; only a browser on the stack's own machine reaches it) | `wss://<host>/ws-keen` |
 | Chat WebSocket — runner (`run.ts`, not configurable) | derives `wss://localhost/ws-keen` (through nginx; needs the TLS switch below) | derives `wss://<host>/ws-keen` |
 | TLS | self-signed — `run.ts` needs `NODE_TLS_REJECT_UNAUTHORIZED=0`; `keen-deploy` needs `KEEN_TLS_INSECURE=true` in the runner `.env` (or `--insecure`) | real certificate, nothing to switch |
 | entanglement start command | `npm run dev-local` (Windows: `npm run dev-local:win`) | `npm run dev` |
@@ -22,11 +22,11 @@ The Keen **MCP server** is the door an AI agent uses to *configure* Keen without
 
 | | |
 |---|---|
-| **Endpoint** | `https://<keen-host>/mcp` (the same host as the admin console; the local environment also exposes it directly on `http://localhost:5545/mcp`) |
+| **Endpoint** | `https://<keen-host>/mcp` (the same host as the admin console; a local development stack also exposes it directly on `http://localhost:5545/mcp`) |
 | **Transport** | MCP **Streamable HTTP**. The server is *stateful*: your client's `initialize` mints a session (`mcp-session-id` header) and that session holds your auth token. |
 | **Health** | `GET /healthz` (alive) · `GET /readyz` (alive **and** connected to the edge bus; the org tier's own availability shows up as a per-call 503) |
 
-Any Streamable-HTTP MCP client works. (The Claude Code commands below are operator guidance for that client, not part of Keen.) With Claude Code, for example: `claude mcp add --transport http keen https://<keen-host>/mcp` (check `claude mcp add --help` for your version). **LOCAL note:** `claude mcp add` has no flag to trust a self-signed certificate (`DEPTH_ZERO_SELF_SIGNED_CERT`), so on `localhost` register the direct plain-HTTP port instead — `claude mcp add --transport http keen http://localhost:5545/mcp` — or start Claude Code with `NODE_EXTRA_CA_CERTS=<path to the sandbox's server.crt>` and keep the https URL. A newly added server is picked up when the session (re)starts (`claude --continue`), not mid-session.
+Any Streamable-HTTP MCP client works. (The Claude Code commands below are operator guidance for that client, not part of Keen.) With Claude Code, for example: `claude mcp add --transport http keen https://<keen-host>/mcp` (check `claude mcp add --help` for your version). **LOCAL note:** `claude mcp add` has no flag to trust a self-signed certificate (`DEPTH_ZERO_SELF_SIGNED_CERT`), so on `localhost` register the direct plain-HTTP port instead — `claude mcp add --transport http keen http://localhost:5545/mcp` (a development stack only — a production-shaped local stack publishes no direct service ports) — or start Claude Code with `NODE_EXTRA_CA_CERTS=<path to the sandbox's server.crt>` and keep the https URL. A newly added server is picked up when the session (re)starts (`claude --continue`), not mid-session.
 
 ## 2. Identity — the MCP account
 
@@ -48,7 +48,7 @@ You act **as an MCP account**: a headless "agent helper" identity a human admin 
 |---|---|---|
 | Spaces, agents, agent settings | full control (per your scopes) | — |
 | API access chain — clients, certificates, webhooks, consumer contracts, api keys | full control (per your scopes), incl. rotate / wake / rebuild caches | — |
-| **MCP consumers** (your own end-user identities) | **everything** — create, assign contract + spaces, enable/disable, rotate secret, delete, **mint their token** | — (only MCP accounts provision them; humans can also disable, rotate or delete — never create or assign) |
+| **MCP consumers** (your own end-user identities) | **everything** — create, assign contract + spaces, enable/disable, rotate secret, delete, **mint their token** (with its id + secret). This covers every MCP consumer in the organization, not only the ones you created: `createdBy` is a record, not an owner, so the consumers of a deleted MCP account can be taken over by another | — (only MCP accounts provision them; humans can also disable, rotate or delete — never create or assign) |
 | **Human consumers** (partner end users) | list / view | create, reset password, assign spaces/contract, delete |
 | **MCP accounts** (other agents) | list / view — to check one exists | create, change role/enabled, rotate, delete — **regardless of your role** |
 | Human accounts, roles | nothing | everything — those pages are closed to MCP accounts |
@@ -90,14 +90,14 @@ Follow this order exactly. After every reply, **remember the values marked ⟶**
 **0. Ask two things up front** — (a) "What is the sandbox URL?" `localhost` ⇒ LOCAL, otherwise SANDBOX (section 1's table): every URL, the TLS switch and the start commands follow from it. (b) "Where is the entanglement project on disk?" (the partner reference site you will run and tunnel in step 6).
 
 **1. Create the Space** — `create_space { title, description }`
- ⟶ the space **ID** · ⟶ the space's **Deployment Token** (also visible via `get_space`; `reset_space_deployment_token` re-mints it and kills the old one).
+ ⟶ the space **ID** · ⟶ the space's **Deployment Token** (also visible via `get_space`; `reset_space_deployment_token` re-mints it — the old one is refused for every new deploy connection at once, while a deploy session already open with it can finish within its short window).
 
 **2. Create the Agent** — `create_agent { spaceId, displayName, agentId, startFlow, startNode }`
- 2.1 Fill and ⟶ remember **Start Flow**, **Start Node**, the **agent name** and the **agent id** (the slug: lowercase letters + single dashes, 3–100 characters). This is important — the runner and the platform address the agent by the slug, and `startFlow`/`startNode` (PascalCase, 3–60) must match the flow you deploy in step 14.
+ 2.1 Fill and ⟶ remember **Start Flow**, **Start Node**, the **agent name** and the **agent id** (the slug: lowercase letters + single dashes, no digits, **unique across the organization**). Make it **4–60 characters**: the platform accepts 3–100, but the flow builder's Agent ID field accepts only 4–60, so a slug in that range passes every check. This is important — the runner and the platform address the agent by the slug, and `startFlow`/`startNode` (PascalCase, 3–60) must match the flow you deploy in step 14.
  2.2 The agent is created **under the space** from step 1 (`spaceId`) — that is the assignment.
  2.3 Optional — its two settings blobs: `update_agent_settings { id, jsonSettings }` (the runtime JSON Settings a flow's scripts read through `system/settings`) and `update_agent_front_settings { id, jsonSettings }` (the partner-facing Front Settings). `id` is the agent's record id from 2.1 (not the slug); `jsonSettings` is the WHOLE blob **serialized as a JSON string** (≤ 1,000,000 characters). Both are write-through: scripts see the new values on their next run — no redeploy. Read back with `get_agent_settings` / `get_agent_front_settings`.
 
-**3. Create the Client Certificate** — `create_certificate { name }` ⟶ its **ID**.
+**3. Create the Client Certificate** — `create_certificate { name, secretKey }` ⟶ its **ID**. `secretKey` (16–32 characters) is optional, but pass one: it seals the private claims of every consumer token (consumer id, email, spaces, tenant key). Without it the certificate shows `Unset` and the seal falls back to a fixed, publicly known key — tokens still work, but anyone holding one can read those claims.
 
 **4. Create the Client** — `create_client { name }` ⟶ its **ID** and its **Secret** (shown once).
 
@@ -115,6 +115,7 @@ Follow this order exactly. After every reply, **remember the values marked ⟶**
  - `origin`  = `<ngrok>` (the exact `scheme://host` — this is what the partner site / runner will present; anything else is silently dropped)
  - `webhook` = `<ngrok>/api/keen-webhook`
  ⟶ the **webhook ID**.
+ Where the allow-list lives: there is no origin on the api key itself. The platform lets in exactly the `origin`s of the webhook records bound to **fully-bound** api keys (all four bindings), read from the served `api_keys` cache — so this origin is accepted only once step 8.1 binds the record, and a later `update_webhook` reaches the allow-list only through `rebuild_api_key_cache`.
 
 **8. The Api Key** — already created in 6.1 (`create_api_key { name }` ⟶ **ID** + **Secret**, shown once). If you skipped that, create it now.
  8.1 Bind **all** the resources created so far to it — `update_api_key { id, clientId, certificateId, consumerContractId, webhookId }`. A key with any binding missing is not live. (`create_api_key` also accepts the four ids directly, so a key created after steps 3–7 can be bound in the same call.)
@@ -124,7 +125,7 @@ Follow this order exactly. After every reply, **remember the values marked ⟶**
 ```bash
 # LOCAL DEVELOPMENT
 KEEN_HOST=https://localhost
-KEEN_WS=ws://localhost:5520/ws          # plain ws: fine for the runner path; a browser on the https ngrok page cannot use it (mixed content)
+KEEN_WS=wss://localhost/ws-keen          # the browser opens it from the https ngrok page: wss only (ws:// is mixed content); accept https://localhost's self-signed cert in that browser first
 
 # SANDBOX
 KEEN_HOST=https://<sandbox-host>            # e.g. https://keen.example.com
@@ -167,21 +168,28 @@ KEEN_API_KEY_SECRET=<api key secret, step 8>
 
 **15. Run a test prompt** — `npx tsx run.ts --prompt "…" --json` and read the trace (live stream + the flow-tree). Fix → validate → deploy → prompt, until it does what you want.
 
-**When the ngrok URL changes** (a free tunnel dies on restart): the origin lives in FOUR places and all four must move together — the webhook record (`update_webhook { id, origin, webhook }`), the site's `.env.local` (`KEEN_ORIGIN`, then restart the site), the runner's `.env` (`KEEN_ORIGIN`), and the **consumer token itself** — the origin is a claim inside it, so re-mint it (`get_mcp_consumer_token` with the stored id + secret) and update `KEEN_TOKEN`. Then `rebuild_api_key_cache` → `wake_api_key`. Skipping any one of the four = silent drops or `Invalid token`.
+**When the ngrok URL changes** (a free tunnel gets a new URL each time it restarts): the URL lives in FOUR places and all four must move together —
+ 1. the **webhook record**, both fields: `update_webhook { id, origin, webhook }`;
+ 2. the site's `.env.local` `KEEN_ORIGIN` — then **restart** the site (the restart also mints it a fresh application token);
+ 3. the runner's `.env` `KEEN_ORIGIN`;
+ 4. every **consumer token** minted under the old origin — the origin is a claim inside it: re-mint the MCP consumer's (`get_mcp_consumer_token` with the stored id + secret) and update `KEEN_TOKEN`; human consumers of the site simply sign in again.
+
+ Then `rebuild_api_key_cache` → `wake_api_key` — the rebuild is what puts the new origin on the allow-list (`update_webhook` alone never reaches it). Skipping any one = silent drops or `Invalid token`.
 
 **When the consumer token expires** (`expires_in`): the runner cannot refresh it itself — by design an MCP consumer's token moves only through this server. Call `refresh_mcp_consumer_token { refresh_token }` (or `get_mcp_consumer_token` again with the stored id + secret) and update `KEEN_TOKEN`. A disabled, deleted or contract-less consumer is refused (406) — fix the consumer, not the token.
 
 ## 6. Secrets discipline
 
-Shown **once**, never retrievable again: the MCP account secret (the admin's), the client secret, the api-key secret, the MCP consumer secret, the space deployment token (re-mintable). Store them in the runner's `.env` or a secret store the moment you receive them; never echo them into chat, logs or files that get committed. Lost one → `rotate_*` / `reset_space_deployment_token` mints a new one and kills the old immediately.
+Shown **once**, never retrievable again: the MCP account secret (the admin's), the client secret, the api-key secret, the MCP consumer secret, the space deployment token (re-mintable). Store them in the runner's `.env` or a secret store the moment you receive them; never echo them into chat, logs or files that get committed. Lost one → `rotate_*` / `reset_space_deployment_token` mints a new one and the old one stops working at once for anything **new**: no new sign-in, token or deploy connection accepts it. What was already issued keeps running — application tokens survive `rotate_api_key`, an MCP consumer's current token pair keeps refreshing after `rotate_mcp_consumer_secret`, and a deploy session already open finishes its short window. A **leaked** secret therefore needs more than a rotate: `delete_api_key` (or unbind its certificate / contract) for a partner key, `set_mcp_consumer_enabled false` or `delete_mcp_consumer` for a consumer — and even those leave an access token already issued valid until it expires (a consumer's lives up to 7 days on today's sandboxes).
 
 ## 7. Watch out for
 
 - **Ask for the sandbox URL first; `localhost` means LOCAL.** Never assume the environment — the wrong host/WS/TLS combination fails silently.
-- **`agentId` is a slug, `space` is an id.** Mixing them gives "agent not found" at run time.
+- **`agentId` is a slug, `space` is an id.** Mixing them gives "agent not found" at run time. Keep the slug 4–60 characters (letters + single dashes) so the platform and the flow builder both accept it; it is unique across the organization.
 - **Half-wired api key = dead key.** All four bindings (client, certificate, contract, webhook) or nothing works — `rebuild_api_key_cache` (406) and `wake_api_key` (400) name the missing binding; the consumer-token tools only refuse (uniform 406), they never say why.
 - **Change → rebuild → wake.** Forgetting the pair is why "I changed it but the site/runner still sees the old thing."
-- **Tunnel the port Next actually reports.** If 3000 was busy the site is on 3001 — `ngrok http 3000` then tunnels nothing; read the `Local:` line. (On a machine that also runs the admin console on 3000 this is the normal case, not the exception.)
+- **Tunnel the port Next actually reports.** If 3000 was busy the site is on 3001 — `ngrok http 3000` then tunnels the wrong thing (or nothing); read the `Local:` line. (On a machine that also runs a local Keen stack's admin console on 3000 this is the normal case, not the exception.)
+- **`KEEN_WS` is opened by the browser, from the https tunnel page** — so it is always `wss://…/ws-keen` on the Keen host (LOCAL: `wss://localhost/ws-keen`, after accepting the self-signed certificate in that browser), never `ws://`, never the ngrok URL.
 - **A running entanglement does not see `.env.local` changes** — restart it after step 9.
 - **Origin is exact-match.** `https://host` ≠ `https://host:3000`. A wrong origin is a *silent* connection drop, not an error.
 - **Names are unique and (for MCP consumers) immutable** — a duplicate name is a 406; pick the final name at creation.

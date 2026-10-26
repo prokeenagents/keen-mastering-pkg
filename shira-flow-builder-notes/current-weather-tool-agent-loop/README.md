@@ -1,8 +1,8 @@
 # Current Weather tool и Agent tool loop — discoveries и runbook
 
 Дата: 28–29 август 2026 г.  
-Проект: /home/n-ministation/Desktop/Building  
-Документация: /home/n-ministation/Desktop/shira-flow-builder-guide
+Проект: `<project-root>`  
+Документация: `shira-flow-builder-guide/` (в този пакет)
 
 ## 1. Резюме
 
@@ -24,9 +24,11 @@
 
 В проекта бяха променени следните файлове:
 
-- /home/n-ministation/Desktop/Building/src/keen-tools.json
-- /home/n-ministation/Desktop/Building/src/scripts/tools/weather.js
-- /home/n-ministation/Desktop/Building/src/flows/Project111.flow
+- `<project-root>/src/keen-tools.json`
+- `<project-root>/src/scripts/tools/weather.js`
+- `<project-root>/src/flows/Project.flow`
+
+Главният flow е `Project.flow` — име само с букви. Цифри в името на flow файл минават като Start Flow на агента, но всеки `File-Label` target (Run / Jump / Flow Pointer / Parallel Context, flow tool entry) е само с букви, така че flow с цифри в името не може да бъде адресиран от node или flow tool. `keen-validate` предупреждава за цифри в името.
 
 Съществуващият flow е:
 
@@ -435,6 +437,8 @@ System prompt-ът трябва да съдържа едновременно:
 Connect → Upload Project
 ~~~
 
+(в extension-а; извън VS Code същият deploy endpoint се вика с `keen-validate` → `keen-deploy`).
+
 Важни факти:
 
 - При deploy целият src/ tree се качва.
@@ -457,7 +461,7 @@ Cache swapped for project ...
 ### JSON
 
 ~~~bash
-jq empty src/keen-tools.json src/flows/Project111.flow
+jq empty src/keen-tools.json src/flows/Project.flow
 ~~~
 
 ### JavaScript
@@ -475,7 +479,7 @@ node --check src/scripts/tools/weather.js
 - System prompt tool name: Current Weather
 - context JSON format
 - Agent ID: agent-one
-- Start Flow: Project111
+- Start Flow: Project
 - Start Node: Start
 - specialRules не съдържа skip-internal-tooling
 

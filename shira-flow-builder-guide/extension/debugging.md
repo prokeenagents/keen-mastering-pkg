@@ -7,8 +7,9 @@ Shira ships **two** debuggers, for the two kinds of code you write: **flow** (th
 > **production** environment does **not** expose them (a sandbox is a single, non-scaling dev environment —
 > it's not a production deployment). Debug on a sandbox; ship to prod without debuggers.
 
-Both need the project **deployed** first (Connect → Upload — see `the-panel.md`), because you're debugging
-the code as it **runs on the sandbox**, not locally.
+Both need the project **deployed** first (Connect → Upload — see `the-panel.md` — or `keen-deploy`),
+because you're debugging the code as it **runs on the sandbox**, not locally. The debuggers live in the
+VS Code extension; without it, read the run through its logs (`../observing-your-flow.md`) and `run.ts`.
 
 ---
 

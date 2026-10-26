@@ -42,7 +42,7 @@ Save this as **`Assistant.flow`** in the project's `src/flows/` folder:
     {
       "id": "agentNode_G7h8I9j0K1l2",
       "type": "agentNode",
-      "position": { "x": 320, "y": 280 },
+      "position": { "x": 320, "y": 512 },
       "data": {
         "label": "", "description": "Answers the user",
         "labelNode": "LLM", "descriptionNode": "Use LLM processor",
@@ -56,7 +56,7 @@ Save this as **`Assistant.flow`** in the project's `src/flows/` folder:
           },
           "specialRules": [],
           "prompts": [
-            { "role": "system", "content": "You are a helpful assistant. Answer the user's question clearly and concisely." }
+            { "id": "6f1d2c3b-4a59-4e6f-8b7a-9c0d1e2f3a4b", "role": "system", "content": "You are a helpful assistant. Answer the user's question clearly and concisely." }
           ]
         }
       },
@@ -65,7 +65,7 @@ Save this as **`Assistant.flow`** in the project's `src/flows/` folder:
     {
       "id": "endNode_M3n4O5p6Q7r8",
       "type": "endNode",
-      "position": { "x": 320, "y": 480 },
+      "position": { "x": 320, "y": 944 },
       "data": {
         "label": "End", "description": "",
         "labelNode": "End Flow", "descriptionNode": "Flow terminal",
@@ -103,7 +103,10 @@ Save this as **`Assistant.flow`** in the project's `src/flows/` folder:
 - **Start label** = one capitalized word, letters only (`Start`). The **file** is `Assistant.flow`, so the
   entry is **`Assistant-Start`**.
 - **Agent** must have `agentId` (slug) + `agentName` + an `llm` block; a **System** prompt is optional but
-  recommended. Leave `sessionId` / `requestId` **empty**.
+  recommended. Each prompt turn is `{ id, role, content }` with a fresh UUID `id` (the canvas mints one on
+  save). Leave `sessionId` / `requestId` **empty**.
+- **Positions** sit on the 16px grid, **432px** apart down the chain (`best-practices.md` → *Canvas
+  layout*).
 - Top level is exactly `{ "nodes": [...], "edges": [...] }`.
 
 ## Making the agent run it

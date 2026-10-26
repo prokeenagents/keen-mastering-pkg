@@ -402,6 +402,8 @@ function buildEntryRegistry(parsed) {
     for (const { file, doc } of parsed) {
         const base = file.replace(/\.flow$/, '');
         if (!RULES.flowFileName.test(base)) err(file, '', `flow file name "${base}" must be PascalCase (${RULES.flowFileName})`);
+        // ms-space accepts digits in a start-flow name, but every File-Label target is letters only.
+        else if (/[0-9]/.test(base)) warn(file, '', `flow file name "${base}" has digits — it can be an agent's start flow, but no Run / Jump / Flow Pointer / Parallel Context node or flow tool can target it (a File-Label is letters only, ${RULES.fileLabel}); use letters only`);
         for (const nv of doc.nodes) {
             const n = asMap(nv);
             if (!n) continue;

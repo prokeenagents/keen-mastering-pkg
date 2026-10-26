@@ -13,8 +13,8 @@ how that project reaches the running platform so the live agent actually uses it
 
 Two things this guide is **not** about:
 - **Building the flows themselves.** Authoring flows has its own dedicated guide — if the question is
-  "how do I build a flow / what nodes are there," that's elsewhere, not here. See
-  `10-flows-and-debugging.md`.
+  "how do I build a flow / what nodes are there," that's `../shira-flow-builder-guide/README.md`, not
+  here. See `10-flows-and-debugging.md`.
 - **Chatting.** Deploying makes the code live, but talking to the agent still needs a **connected
   client** on top of it. Set that expectation: deploy is one step; a partner site or test app has to be
   wired too → `06-connect-a-partner-site.md`.
@@ -63,7 +63,8 @@ upload (with the Go deploy tool, see `../keen-mcp-guide/README.md`), using the t
   space and touches only its flows. If a change didn't appear, confirm you deployed into the **right**
   space.
 - **Authoring and deploying are different things.** This guide takes a *built* project live. Building
-  the flows is a separate, dedicated guide — don't conflate the two.
+  the flows is a separate, dedicated guide (`../shira-flow-builder-guide/README.md`) — don't conflate
+  the two.
 - **A rejected (unsafe) deploy changes nothing.** The live agent keeps serving the last clean version
   until a passing deploy replaces it — a failed scan is not an outage.
 - **Live code alone isn't a chat.** A deployed agent still needs a connected client before anyone can

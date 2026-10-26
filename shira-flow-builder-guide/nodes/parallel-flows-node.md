@@ -131,4 +131,4 @@ at once, so N heavy flows use N× resources in parallel.
 
 ---
 
-*Next node: End Flow (`end-flow-node.md`).*
+*Next node: Flow Pointer (`flow-pointer-node.md`).*

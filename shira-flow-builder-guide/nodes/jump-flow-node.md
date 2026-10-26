@@ -117,4 +117,4 @@ this side at all.
 
 ---
 
-*Next node: End Flow (`end-flow-node.md`).*
+*Next node: Join Flow (`join-flow-node.md`).*

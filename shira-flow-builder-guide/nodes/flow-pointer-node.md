@@ -102,4 +102,4 @@ None of its own — it's a declaration the Parallel Flows node reads. The cost i
 
 ---
 
-*Next node: End Flow (`end-flow-node.md`).*
+*Next node: Parallel Context (`parallel-context-node.md`).*

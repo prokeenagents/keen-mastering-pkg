@@ -6,9 +6,10 @@ scope — that's the engineering team.)
 ## "It keeps asking for my password every few minutes — can I stop it?"
 
 **Cause:** sessions are time-limited for security. The access token lives **60 seconds** and is
-refreshed silently for as long as you keep using the console; after about **10 minutes** of
-inactivity the in-place password prompt appears (three wrong attempts send you to the login page).
-Every sandbox the platform renders uses these timings.
+refreshed silently for as long as you keep using the console; after about **11 minutes** of
+inactivity (the 60-second token plus a 10-minute idle grace) the in-place password prompt appears
+(three wrong attempts send you to the login page). Every sandbox the platform renders uses these
+timings.
 **Fix:** there's **no toggle** to disable it — it's a security safeguard, not a setting. Staying
 active keeps you signed in; the prompt only fires after inactivity, and you continue where you left
 off. See `01-the-admin-console.md`.
@@ -18,7 +19,9 @@ off. See `01-the-admin-console.md`.
 **Cause:** your **role** doesn't grant that permission — the console hides what you're not allowed to
 touch, with no error.
 **Fix:** an owner or admin grants the scope in **Organization → Roles** (read to see it, write to
-act). Refresh. See `01-the-admin-console.md`.
+act). Everyone holding that role is signed out automatically (*"Your access changed — please sign in
+again."*) — they sign in again and the new permissions are there; no refresh needed. See
+`01-the-admin-console.md`.
 
 ## "The Wake button is greyed out."
 
@@ -36,8 +39,11 @@ contract, webhook) in place.
 **Cause:** the site's browser **Origin** doesn't exactly match the one on the key's Webhook entry.
 Origin is matched exactly on `scheme://host[:port]` (the port matters; only 80/443 are omitted; no
 wildcards), and a mismatch is **silently dropped** — the caller sees a connection reset or a generic
-gateway error, never a helpful one.
-**Fix:** check the Webhook entry's Origin against the site's real Origin, character for character.
+gateway error, never a helpful one. Two look-alikes: the key is **half-wired** (its Origin isn't
+allow-listed until all four bindings are set), or the Webhook was just **edited** and nobody pressed
+Rebuild (the new Origin isn't let in until then).
+**Fix:** check the Webhook entry's Origin against the site's real Origin, character for character;
+confirm all four bindings on the key; then **Rebuild Resource Cache** on the key and **Wake**.
 
 ## "The partner's login / registration calls fail with a bare 406 (or 401) and no reason."
 
@@ -53,7 +59,9 @@ platform's own log, never in the reply.
 irreversibly.
 **Fix:** there's no recovery. **Rotate** to mint a new one and hand it over again (for an MCP account:
 **Organization → MCP Accounts → the account → Rotate Secret**; the old secret dies immediately, so
-give the agent the new one straight away).
+give the agent the new one straight away). If the secret **leaked** rather than got lost, know that a
+rotate doesn't end a session someone already opened with it — delete the MCP account and create a
+fresh one to cut that too (`02-organization.md`).
 
 ## "The AI agent says its MCP credentials don't work."
 
@@ -123,7 +131,8 @@ set a **new** password, and then log in with the new one.
 **Cause:** their site hasn't re-fetched since your change.
 **Fix:** the served copy is already fresh (it refreshed on your save), so the partner just needs to
 re-read — press **Wake** on the key to nudge them. You do **not** normally need to rebuild a cache
-for this. If you changed several things bound to that key and want to be certain, do the two-click
+for this — except after a **Webhook** edit, which reaches the served copy only through a Rebuild. If
+you changed several things bound to that key and want to be certain, do the two-click
 routine on the key's page: **Rebuild Resource Cache** (on an api key it refreshes everything bound
 to it), then **Wake**. See `08-wake.md`.
 
@@ -135,8 +144,8 @@ to it), then **Wake**. See `08-wake.md`.
 ## "Reset password isn't available / does nothing."
 
 **Cause:** the console offers it only on **confirmed, non-owner** accounts (the server does not
-enforce the confirmed rule — resetting a `New` account through the MCP server kills its confirmation
-link).
+enforce the confirmed rule — resetting a `New` account by a direct API call, outside the console,
+kills its confirmation link; the Keen MCP server can't reset accounts at all).
 **Fix:** confirm the account first; the owner resets their own from **Account → Password**.
 
 ## "I want to debug what's happening in production."

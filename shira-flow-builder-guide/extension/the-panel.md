@@ -1,7 +1,9 @@
 # The Shira Flow Builder panel (create · connect · deploy)
 
-The extension adds a **Shira Flow Builder** view to the VS Code activity bar. This is where you scaffold a
-project, connect it to a Space, and deploy it. There's also a **Breakpoints** view next to it.
+The extension adds a **Shira Flow Builder** view to the VS Code activity bar. This is where a person using
+the canvas scaffolds a project, connects it to a Space, and deploys it. There's also a **Breakpoints** view
+next to it. (A building agent works without VS Code: it writes the files by hand and deploys with
+`keen-validate` → `keen-deploy` — see the end of this page.)
 
 ---
 
@@ -64,6 +66,8 @@ Connect/Upload talk HTTP to the Keen deploy endpoint: `POST {server}/ms/deploy/v
 session token), then `POST {server}/ms/deploy/v1/project/upload` (multipart field `bundle`, a `bundle.zip`
 of your `src/`, with the **session** token in `X-Deployment-Token`); Disconnect is
 `POST {server}/ms/deploy/v1/project/disconnect`. Self-signed TLS is tolerated only for `localhost` /
-`127.0.0.1`. You never run a CLI or `npm` deploy — it's all the panel.
+`127.0.0.1`. Inside the extension you never run a CLI or `npm` deploy — it's all the panel. Outside it, the
+`keen-deploy` binary speaks the same connect → upload → disconnect protocol (config from `.env`, not
+`keen.json`; see `agent-runner/docs/DEPLOY.md`), and `keen-validate` checks the project first.
 
 *Next: `debugging.md` (flow & script debuggers). Project files: `project-and-files.md`.*

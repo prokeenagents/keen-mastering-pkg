@@ -35,9 +35,11 @@ unit of "who can reach these agents." Deleting a space **cascades**: the agents 
 An agent is the runnable assistant. Its key parts:
 - **Display name** — what humans call it.
 - **Agent ID (slug)** — its **stable id**: **kebab-case** — lowercase letters and single dashes
-  (e.g. `support-bot`), no capitals, no digits. Everything refers to the agent by this slug —
-  deployments, chats, settings. Renaming it is possible but disruptive (things that referenced the
-  old slug must be updated), so choose it well.
+  (e.g. `support-bot`), no capitals, no digits. It is **unique across the whole organization** — two
+  spaces can't both have a `support-bot`. The form accepts 3–100 characters, but pick one **4–60**
+  characters long: the flow builder's Agent ID field allows only that, so such a slug passes every
+  check. Everything refers to the agent by this slug — deployments, chats, settings. Renaming it is
+  possible but disruptive (things that referenced the old slug must be updated), so choose it well.
 - **Start Flow + Start Node** — where the agent begins running. These are two required fields with
   their own rules — see the section below; they are the #1 thing people get wrong.
 - **Active** — a switch; only active agents run.
@@ -82,8 +84,8 @@ deployed project has no flow/node with those names, the agent does nothing.
 **"Can I just set something for now?"** — Yes, but *not a random word*. Enter the names you will
 actually use when you build the project, following the PascalCase rule (a common choice is
 `MainFlow` / `Start`), and make sure your project ends up with a flow file and start node named
-**exactly** that. If you don't know the names yet, get them from whoever builds the flow (the flow
-is authored with a separate tool — see `10-flows-and-debugging.md`) rather than inventing values
+**exactly** that. If you don't know the names yet, get them from whoever builds the flow (flows are
+authored with the flow builder — `../shira-flow-builder-guide/README.md`) rather than inventing values
 that won't exist. **Never fill these with a guess an assistant made up** — a made-up name that
 isn't in the project is a silent break: the form accepts it, but the agent never runs.
 
@@ -103,8 +105,9 @@ deploy it → then chat" — in the README's **Golden path** the agent is step 2
 ## Watch out for
 
 - **Two different naming rules — don't swap them.** Agent ID (slug) is **kebab-case** (lowercase +
-  single dashes, no capitals/digits, 3–100 chars). Start Flow / Start Node are **PascalCase**
-  (capital first, letters + digits, no dashes, 3–60 chars). The form rejects the wrong format.
+  single dashes, no capitals/digits, 3–100 chars, unique org-wide — keep it 4–60 so the flow builder
+  accepts it too). Start Flow / Start Node are **PascalCase** (capital first, letters + digits, no
+  dashes, 3–60 chars). The form rejects the wrong format.
 - **Start Flow / Start Node must match the deployed project** — they name a real flow file and its
   start node. A guessed value the form accepts but the project doesn't contain = the agent silently
   never runs. Don't invent them.

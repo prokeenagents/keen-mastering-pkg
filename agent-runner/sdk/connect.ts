@@ -165,8 +165,10 @@ export default class WSConnectAPI {
     /**
      * Resolve with the correlationID once the relay's welcome frame
      * has arrived. Useful for callers that need to gate sends on the
-     * connection being fully established. Rejects if the connection
-     * closes before welcome arrives.
+     * connection being fully established. It never rejects: a close
+     * before the welcome swaps in a fresh pending promise (resetWelcome),
+     * so a caller that must fail fast races it against onStatus
+     * 'disconnected' (agent-runner's run.ts does).
      */
     whenReady(): Promise<string> {
         if (this.correlationID) {

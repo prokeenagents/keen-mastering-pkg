@@ -55,9 +55,9 @@ everywhere `${…}` is interpolated. The rules are strict:
 | **Condition** · expression | ✅ **condition-style** | `${dictionary.x}`/`${session.x}` substituted → jsep evaluates. Bare `dictionary.x` **throws**. |
 | **Assignment** · pair **value** | ✅ value interpolation | types string/number/boolean/array; object → `null` |
 | **Assignment** · pair **key** | ❌ literal | flat top-level property name (`dict[key]`) |
-| **Loop** · Read from / Set to | ❌ **path reference** | must be `dictionary.<path>` or `session.<key>` (optional `${}` wrapper); a bare name **throws** |
-| **Run Flow / Jump Flow** · Flow | ✅ interpolated (string) | so the target `File-Label` can be dynamic (`${dictionary.which}`) |
-| **Parallel Flows** · Flow Pointer target | ✅ interpolated (string) | the entry name |
+| **Loop** · Read from / Set to | ❌ **path reference** | must be `dictionary.<path>` or `session.<key>` (optional `${}` wrapper); a bare name **throws**. Read from belongs in the dictionary — a session value is never an array, so a `session.` source finishes at once |
+| **Run Flow / Jump Flow** · Flow | ✅ interpolated (string) | engine-side a target could be dynamic (`${dictionary.which}`), but the form and `keen-validate` accept only a literal letters-only `File-Label` |
+| **Parallel Flows** · Flow Pointer target | ✅ interpolated (string) | the entry name — same literal-only form rule as Run / Jump |
 | **Parallel Context** · contextCollection | ❌ **dictionary reference** | the form requires the literal `dictionary.<path>` prefix (the engine also tolerates a `${dictionary.<path>}` wrapper) |
 | **Parallel Context** · pipe (template flow) | ❌ **static string** | not interpolated |
 | **Agent** · agentName / agentId / sessionId / requestId / each prompt **content** | ✅ interpolated | only these |
@@ -100,15 +100,21 @@ everywhere `${…}` is interpolated. The rules are strict:
   boolean, or null**. Objects, arrays, functions, `NaN`/`Infinity` are **rejected** (a write throws).
 - **Where it lives:** the platform's fast store, whole-run. **Cap 1.5 MB, TTL 60 s.**
 - **Shared across the *entire run*** — every flow, every Run/Jump child, every parallel branch sees the
-  same session (they share it via the parent session id). Use it for values that must be visible
-  everywhere in the run; use the **dictionary** for per-flow working data.
+  same session: Scripts and flow nodes always open the run's root session. Use it for values that must be
+  visible everywhere in the run; use the **dictionary** for per-flow working data.
+  - **One exception — an Agent node inside a Parallel Context clone.** An Agent node resolves its
+    `${session.*}` placeholders against its flow's *parent* session id, or its own session id when there is
+    none. A Parallel Context clone has its own fresh session and no parent session id, so there (and in any
+    flow spawned from a clone) `${session.*}` in an Agent field comes back **empty**. Put
+    such values in the clone's dictionary instead (see `business-objects.md`).
 - **Seeded EMPTY.** ⚠️ **Correction to a common assumption:** the session is **not** pre-filled with
   `sessionID` / `requestID` / `userID` / `userEmail`. Those are **not** in the session at runtime — run
   identity lives in **treeContext** (below). So `${session.userEmail}` is **empty** unless a node
   explicitly wrote a `userEmail` key. Don't rely on session identity keys that nothing set.
 - **Who reads it:** `${session.key}` (flat) in interpolated fields; a **Script** via `system/session`.
-- **Who writes it:** a **Loop** whose `Set to` targets `session.<key>`; a **Script** via `system/session`
-  (`setSessionValue` / direct property). (No flow node other than Loop writes the session.)
+- **Who writes it:** a **Loop** whose `Set to` targets `session.<key>` (primitive elements only — an
+  object or array element is rejected); a **Script** via `system/session` (`setSessionValue` / direct
+  property). (No flow node other than Loop writes the session.)
 
 ## `agent-state` — the conversation (the "third thing")
 

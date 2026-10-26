@@ -23,6 +23,11 @@ A role that should wire a partner end to end needs **all five** (with Write); gr
 "**Fully bound**" = all four bound. Only then does the key's Origin join the allow-list, tokens can
 be minted, and Wake is enabled. Unbinding any one switches the partner off the same way.
 
+**Where the allow-list lives:** there is no origin field on the key itself. The platform's allow-list
+is the set of **Origins on the Webhook records bound to fully-bound keys**, read from the served
+copy of the keys (`07-caches.md`). That is why a Webhook edit needs a **Rebuild Resource Cache** on
+its key before a new Origin is let in.
+
 ## How to open API access for a partner (the steps)
 
 Do them in **this** order — it's the canonical one (steps 3–8 of the README's Golden path), and
@@ -31,8 +36,11 @@ path steps 1–2, `03-spaces-and-agents.md`). Keep a note of every ID and secret
 secret anywhere but the partner's own config.
 
 1. **Create the Certificate.** Api → Certificates → **Create**. Fill **Name**; the **Secret Key**
-   field is optional — type one (16–32 characters) or press **Generate**. Press **Create**. The
-   public PEM is always viewable on the detail page. Remember its **ID**.
+   field is optional — type one (16–32 characters) or press **Generate**. **Set one:** it seals the
+   private part of every consumer token (email, consumer ID, spaces, tenant key). Left empty
+   (`Unset`), everything still works, but the seal falls back to a fixed built-in key, so anyone who
+   holds a token can read those fields. Press **Create**. The public PEM is always viewable on the
+   detail page. Remember its **ID**.
 2. **Create the Client.** Api → Clients → **Create**. Fill **Name**, press **Create**. A panel titled
    **Client Secret — shown once** appears with the **secret** and a copy button — it is
    **reveal-once**; copy it now and hand it to the partner's server team. Then press **I have copied
@@ -47,9 +55,12 @@ secret anywhere but the partner's own config.
    **One-time code — consumers who signed up on a partner site**, **Freeze partner-registered
    consumers**, **Freeze in-app-created consumers**; **Save**. These are the outside-consumer
    settings.
-4. **Get the partner's Origin.** For the reference partner site this is a tunnel: start
-   `ngrok http 3000` and take the URL it prints (`https://<your-tunnel>.ngrok-free.app` — a
-   placeholder). A real partner tells you its site's Origin instead.
+4. **Get the partner's Origin.** For the reference partner site this is a tunnel to the port the
+   site **actually** runs on — start the site, read the port from its `Local: http://localhost:<port>`
+   line (3000 only if 3000 was free), then `ngrok http <port>` and take the URL it prints
+   (`https://<your-tunnel>.ngrok-free.app` — a placeholder). The site won't boot without all six of
+   its `KEEN_*` values, so the README's Golden path step **6** creates the Api Key first and boots it
+   with a placeholder Origin. A real partner tells you its site's Origin instead.
 5. **Create the Webhook entry.** Api → Webhooks → **Create**. Three fields: **Name**; **Origin** —
    the partner's exact browser origin (`scheme://host[:port]` — the port matters; only 80/443 are
    omitted; no path, no trailing slash, no wildcards; for the tunnel: the ngrok URL); and **Webhook
@@ -61,6 +72,8 @@ secret anywhere but the partner's own config.
    Golden path's **8.1**). Press **Create**. The plaintext key is shown **once** in a reveal panel
    (*"Copy this key now — it will not be shown again"*) — copy it, then **Open Api Key** to reach the
    detail page, where the **Api Key ID** has a copy button. Remember the key's **ID + secret**.
+   (Created the key earlier — the Golden path's step 6.1 does, so the reference site can boot? Then
+   open it, set the four pickers on its detail page and **Save**.)
 7. **Confirm it's fully bound.** On the key's detail page all four bindings should be set. Now the
    Origin is allow-listed and Wake is enabled.
 8. **Hand off, Rebuild, Wake.** Give the partner: the **Client id + secret**, the **Api Key id +
@@ -72,15 +85,18 @@ secret anywhere but the partner's own config.
 
 ## Rotation & deletion (what cuts access)
 
-- **Rotate the Api Key** — mints a new plaintext, keeps the record's identity. Cuts off *direct
-  raw-key* calls immediately, but **does NOT revoke application tokens** (they ride the key's
-  identity, which rotation preserves).
+- **Rotate the Api Key** — mints a new plaintext, keeps the record's identity. From that moment the
+  old plaintext can no longer obtain an application token (the partner's server needs the new one
+  the next time it asks), but rotation **does NOT revoke application tokens already issued** (they
+  ride the key's identity, which rotation preserves).
 - **Rotate a Client secret** — a new secret is shown once; the old one stops working the moment you
   confirm.
 - **Rotate a Certificate** — re-mints the RSA keypair in place: the old public key stops verifying
   immediately and the new public PEM is (as always) readable on the detail page. The **shared secret
   key is not touched** by a rotate — it stays as it was, readable and editable on the same page (it's
-  the one credential here that is never reveal-once).
+  the one credential here that is never reveal-once). Either change — a rotate or a new secret key —
+  invalidates every consumer token the tenant already holds (they no longer verify), so its
+  consumers sign in again.
 - **Delete the Api Key** — revokes everything, including outstanding application tokens, and sends
   the partner a final notice so it discovers the revocation.
 - **Delete a bound Client / Certificate / Contract** — *unbinds* it from the key (the key survives
@@ -106,8 +122,10 @@ To truly revoke a partner: **delete the key**, or unbind its certificate or cont
   re-hand; there is no recovery.
 - **Org-wide caps** — 20 api keys (and similar per-resource caps); create fails past the cap with a
   "Reached the maximum number of…" message. Delete one first.
-- **Order matters, and the key comes last.** Certificate → Client → Contract (+ its spaces and
-  policy) → Webhook → Api Key, then bind all four on the key. Doing the key first leaves its pickers
-  empty; doing the webhook before you know the partner's real Origin means editing it later.
+- **Order matters, and the key's bindings come last.** Certificate → Client → Contract (+ its spaces
+  and policy) → Webhook → Api Key, then bind all four on the key. Creating the key earlier is fine
+  (the reference site needs its ID + secret to boot — Golden path 6.1); its pickers simply stay empty
+  until you bind them on its detail page. Doing the webhook before you know the partner's real
+  Origin means editing it later — and a Webhook edit needs a Rebuild on its key.
 - **After the key is bound: Rebuild, then Wake** — not Wake alone. The key's Rebuild Resource Cache
   refreshes everything bound to it and refuses a half-wired key.

@@ -26,7 +26,7 @@ new ChatAPI({ …, cookies: ['gconnect', 'locale'] });
 ```
 
 Read from the **browser's `document.cookie`**, forwarding only the named cookies.
-Two edge behaviours:
+Three edge behaviours:
 
 - **omit the option** → forward *every* JS‑readable cookie (the default).
 - **`cookies: []`** → forward **nothing**.

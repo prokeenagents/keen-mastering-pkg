@@ -47,8 +47,8 @@ platform accounts — `protected — read only` (owner) or `protected — role l
 `Email` (read-only), `Name` (read-only; shows `— not confirmed yet —` until the user sets it), and
 `Role` (the one editable field). Footer buttons (writers only): `Save`, `Reset Password` (only for a
 **confirmed** account that isn't the owner), and `Delete` → `Confirm delete` + `Cancel`. The owner is
-fully locked; admin has its role select locked but can still be reset/deleted. **No copy buttons on
-this page.**
+fully locked; admin has its role select locked, and its `Reset Password` / `Delete` work only for the
+owner — an admin pressing them on another admin is refused. **No copy buttons on this page.**
 
 ---
 
@@ -74,8 +74,9 @@ select; an `Enabled` switch (off = the account cannot authenticate or use the MC
 `Last login` badge showing when the agent last signed in. Footer (writers only): `Save` (role /
 enabled — a role change applies at the account's next authentication), `Rotate Secret` (**a single
 click — no confirm step**: it mints the new secret on the spot and shows the same one-time panel,
-dismissed with `I have copied it — back to the account`; the old secret stops working immediately),
-and `Delete` → `Confirm delete` + `Cancel`.
+dismissed with `I have copied it — back to the account`; the old secret stops working immediately,
+though a session already signed in with it keeps renewing — `02-organization.md`), and `Delete` →
+`Confirm delete` + `Cancel`.
 
 ---
 
@@ -116,7 +117,9 @@ and `Description` (required, placeholder `What is this space for?`) — both mus
 **Detail page** (card `Space Configuration`). Editable fields `Title` and `Description`. Then two
 read-only fields, each with its own copy icon and (for the token) a reset button:
 - `Deployment Token` — copy icon (aria `Copy deployment token`) + a `Reset Token` button (writers
-  only); resetting mints a new token and kills the old one immediately.
+  only); resetting mints a new token, and from that moment every **new** deploy connection with the
+  old one is refused (a deploy session already opened with it can finish within its short window —
+  `03-spaces-and-agents.md`).
 - `Space ID` — copy icon (aria `Copy Space ID`).
 
 Footer: `Save`, `Rebuild Resource Cache`, `Delete` → `Confirm delete` + `Cancel`. Below the form, an
@@ -182,9 +185,10 @@ Z`. Empty states: `No consumers on this page.` / `No consumers match the filters
 and `Contract` (a select; default option `No contract — belongs to the organization`). Submit:
 `Create`.
 
-**Detail page** (card `Tenant & Identity`). Badges: `Active`/`New`; `Partner sign-up` or `In-app`
-(neither on a consumer an admin created — those rows carry no sign-up marker); and `Orphan` if its
-tenant was deleted. Read-only `Email` and `Name`; a `Contract` select (moving a
+**Detail page** (card `Tenant & Identity`). Badges: `Active`/`New`; `Partner sign-up` on a consumer
+that signed up on a partner site (a consumer an admin created shows no sign-up badge — today the
+`In-app` badge doesn't appear on any consumer — yet the contract's in-app policy rows apply to it);
+and `Orphan` if it is a partner sign-up whose tenant was deleted. Read-only `Email` and `Name`; a `Contract` select (moving a
 consumer to another tenant trims its spaces and signs its session out — the form warns you first); a
 read-only `Consumer ID` (copy icon `Copy Consumer ID`); and an `Activity` line. Footer (writers only):
 `Save Contract` (or `Confirm unbind` when clearing the tenant, with `Keep current contract`),
@@ -215,19 +219,23 @@ refresh a token). Name, contract and spaces are never editable here — only an 
 those, through the MCP server. Footer (`mcp_consumers` writers only): `Save` (the Enabled switch),
 `Rotate Secret` (**a single click — no confirm**; it mints the new secret on the spot and shows a
 **one-time secret panel** — the `MCP Consumer ID` and the new secret, each with a copy button, the
-same reveal-once panel as MCP Accounts; the old secret stops working immediately; `I have copied it
-— back to the consumer` returns to the form), and `Delete` → `Confirm delete` + `Cancel`.
+same reveal-once panel as MCP Accounts; the old secret stops working immediately, though a session
+the agent already holds keeps refreshing; `I have copied it — back to the consumer` returns to the
+form), and `Delete` → `Confirm delete` + `Cancel`.
 
 ---
 
 ## Api → Api Keys
 
-One write scope unlocks this whole API section. An Api Key is the hub that binds four resources.
+An Api Key is the hub that binds four resources. Each of the five Api entries has its **own** scope —
+this one is `api_keys`; Clients, Certificates, Contracts and Webhooks each need theirs
+(`05-api-access.md`).
 
 **List page** (`Api Key List`). Columns: `Name`, `Key Prefix`, `Origin` (`No webhook bound` when
 unbound), `Bindings` (rendered `n of 4`), and a `Link` (Visit). Sortable headers. Empty state:
-`No api keys yet.` The `Create Api Key` button is on the Api Keys landing page. (A cap on how many
-keys you can create shows as an error alert on the create form, not a fixed message.)
+`No api keys yet.` The `Create Api Key` button is on the Api Keys landing page. (Past the cap, the
+create form shows an error alert: `Reached the maximum number of api keys (20). Revoke an existing
+one before creating a new key.`)
 
 **Create form** (card `Credential Details`). `Name` (required, placeholder `Enter Api Key Name`),
 then four binding pickers in this order — `Pick a webhook`, `Pick a client`, `Pick a certificate`,
@@ -284,7 +292,8 @@ Below the form, a **Rotate Secret** card (writers): a `Rotate Secret` button →
 **Create form** (card `Certificate Details`). `Name` (required, placeholder `Enter Certificate Name`)
 and an optional `Secret Key` field with a **`Generate`** button (dice icon) beside it — the shared
 symmetric secret both sides hold; leave it empty and the certificate has **no** secret key (the list
-shows `Unset`). Submit: `Create`. **Nothing here is reveal-once** — the secret stays an editable
+shows `Unset`, and consumer tokens are then sealed with a fixed built-in key anyone can open — set
+one, `05-api-access.md`). Submit: `Create`. **Nothing here is reveal-once** — the secret stays an editable
 field.
 
 **Detail page** (card `Key Material`). `Name`; `Secret Key` (with a `Copy secret key` icon and a
@@ -318,16 +327,21 @@ section), and `Webhook`. Footer: `Save`, `Rebuild Resource Cache`, `Delete` → 
 **Detail — card `Registration & Login Policy`** (the five toggles). A board with columns `Policy`,
 `Currently`, `Enabled` and its own `Save Policy` button. The five rows:
 - `Partner sign-up` — whether a partner site may register new consumers.
-- `One-time code — consumers created in-app` — require an emailed code at login for in-app consumers.
+- `One-time code — consumers created in-app` — require an emailed code at login for in-app consumers
+  (every consumer that did **not** sign up on a partner site — including the ones an admin creates).
 - `One-time code — consumers who signed up on a partner site` — same, for partner-registered
   consumers.
 - `Freeze partner-registered consumers` — refuse those consumers at login.
 - `Freeze in-app-created consumers` — refuse in-app consumers at login.
 
+None of the five rows applies to **MCP consumers** — they never get a code and are never frozen here.
+
 **Detail — card `Spaces`** (the three assignment columns, one table). Columns: `Space`, `Assigned`
-(the master set this tenant may offer at all), `In-app default` (auto-granted to consumers created
-in-app), and `Partner default` (auto-granted to consumers who sign up on a partner site). The default
-switches are disabled until `Assigned` is on. Its own `Save Spaces` button. Empty:
+(the master set this tenant may offer at all), `In-app default` (meant for consumers created in-app —
+saved, but **not applied today**: a consumer created in the console starts with no spaces, so grant
+them on its own Spaces board), and `Partner default` (auto-granted to consumers who sign up on a
+partner site). The default switches are disabled until `Assigned` is on. Its own `Save Spaces`
+button. Empty:
 `No spaces exist yet — create one in AI Spaces before a tenant can offer anything.`
 
 ---
@@ -431,9 +445,10 @@ logs.` The `Create Log Record` button lives on this page's create card (writers 
   for a confirmed account; `Save Policy` / `Save Spaces` light up only when that board changed.
 - **Delete is two-step, and so are most Rotates and key changes** — `Delete` → `Confirm delete`, an
   api key / client / certificate `Rotate` → `Confirm rotate`, a contract key edit →
-  `Confirm key rotation`. **The one exception is the MCP account's `Rotate Secret` — a single click
-  mints the new secret immediately.** Otherwise nothing destructive happens on the first click.
-- **Cache `Invalidate` is also one click, no confirm.** The red styling is the only warning.
+  `Confirm key rotation`. **Three controls are a single click, with no confirm:** the MCP account's
+  `Rotate Secret` and the MCP consumer's `Rotate Secret` (each mints the new secret immediately), and
+  the cache `Invalidate` (the red styling is its only warning). Otherwise nothing destructive happens
+  on the first click.
 - **Reveal-once panels are your only chance.** The plaintext **api key** (on create and on rotate),
   the **client secret**, an **MCP account's secret** (on create and on `Rotate Secret`), and an
   **MCP consumer's secret** (on `Rotate Secret`) appear exactly once. Copy them the moment they

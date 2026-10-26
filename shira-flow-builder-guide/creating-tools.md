@@ -491,7 +491,8 @@ And in the prompt, once for all tools:
 
 Note the distinction: **call-level failures — an unrecognised block, a missing tool, a tool that pushed
 nothing — do not go through the Fallback edge.** The engine simply feeds a short message back and re-runs
-the agent so it can recover. **Fallback fires only on a real model-provider failure.**
+the agent so it can recover. **Fallback fires only on a real model-provider failure** — or on a broken
+node configuration caught before the call (missing `agentId` / `llm`, an unknown model: `E6101`).
 
 ---
 
@@ -531,8 +532,8 @@ come from if this node dies" — and wire that path.**
 
 > Sometimes the best exit is **no branch at all.** With us the flow tool had to check the input and stop on
 > an invalid one. Instead of a Condition node, the script simply leaves an **empty array** — and a Parallel
-> Context over an empty collection passes straight to its exit. Fewer nodes, fewer edges, and no dependence
-> on a known bug in the compiler of Condition nodes.
+> Context over an empty collection passes straight to its exit. Fewer nodes, fewer edges, one branch fewer
+> to wire and test.
 
 ---
 

@@ -15,7 +15,7 @@ the `code` is an `E….` string and `message` is the human text from the Keen se
 ### The prefix convention (this is the retryability contract)
 
 The **letter‑group after `E` is the class**, and the class decides whether the SDK
-retries. `TaskQueue.isTerminalErrorCode` is the authority:
+retries a **per‑node call**. `TaskQueue.isTerminalErrorCode` is the authority:
 
 ```ts
 // task-queue.ts
@@ -29,14 +29,21 @@ private isTerminalErrorCode(code) {
 | `E1…` | success (e.g. `E1001` OK) | — |
 | `E2…` | **client error** — bad/malformed/duplicate input; won't fix itself | **terminal** — surfaced, run fails |
 | `E3…` | **auth failure** — bad/expired token, not authorized | **terminal** — surfaced |
-| `E4…` | **capacity / backpressure** | **retried** (1 s backoff) |
-| `E5…` | resource | retried |
-| `E6…` | system | retried |
-| `E7…` | upstream | retried |
+| `E4…` | **capacity / backpressure** | **retried** on a per‑node call (1 s backoff) |
+| `E5…` | resource | retried on a per‑node call |
+| `E6…` | system | retried on a per‑node call |
+| `E7…` | upstream | retried on a per‑node call |
 | `E8…` | **explicit cancellation** | **terminal** — surfaced |
 
-So `E4…` is the retryable/backpressure class the client keeps re‑issuing until it
-clears; `E2…` / `E3…` / `E8…` are the terminal ones that end the run.
+This split applies to the **per‑node calls** that follow the first reply: a
+non‑terminal code is re‑issued after 1 s — up to 10 times on an `initial` node,
+forever on a continuation — while `E2…` / `E3…` / `E8…` end the run at once.
+
+The **initial run frame** (the turn's first frame, the one carrying the prompt) is
+different: *any* non‑success reply to it, `E4…` included, throws straight away
+(`task-queue.ts`: `if (!envelope.success) throw new Error(envelope.message ?? envelope.code)`),
+so `runFlow()` rejects with the server's message. A capacity refusal at the start of
+a turn is surfaced, not retried — send the turn again.
 
 ### The common codes you can rely on
 
@@ -71,12 +78,16 @@ found; flow may be cancelled or stale` — a run's server‑side state was gone 
 later frame arrived (after a cancel, or the 60 s state TTL passed). It's in the
 `E6` class, so the SDK retries it rather than failing outright — and on a
 continuation that retry is **infinite** (once a second) until the user cancels, so a
-stale flow does not fail by itself.
+stale flow does not fail by itself. The state never comes back, so those retries
+cannot succeed: the turn just looks stuck. Recover by cancelling (`cancel()`, the
+chat's Cancel button) and sending the turn again. On an `initial` node it gives up
+after 10 tries with `max response retries exceeded for node …`.
 
 ### How the app renders an `E….`
 
 `TaskQueue` throws `new Error(envelope.message ?? envelope.code)` on a terminal
-error, and `ChatShell.send` catches it into a red error bubble:
+error (and on any failed reply to the initial run frame), and `ChatShell.send`
+catches it into a red error bubble:
 
 ```tsx
 catch (err) {
@@ -149,13 +160,17 @@ throws it. (Continuations retry infinitely, so they don't hit this.)
 
 A WS close shows up on **`onSystem`** as `close (code <n>)` — never on `onStream`.
 
-- **1006 — abnormal closure.** Most often the page's **Origin is not allow‑listed
-  on the Keen api_key** (the server drops the upgrade), or the WS URL / network is
-  wrong. On a dev deployment it also happens when a `wss://` endpoint's certificate
-  hasn't been accepted by the browser yet. Check: the app is served from an
-  allow‑listed origin, the WS URL points at the right host (not `localhost` from a
-  second device), and the scheme matches the page (`ws://` on http, `wss://` on
-  https — a browser blocks `ws://` from an https page as mixed content).
+- **1006 — abnormal closure.** Most often the page's **Origin is not in Keen's
+  allow‑list** — the `origin` of a webhook record bound to an api_key, matched
+  exactly (the server drops the upgrade) — or the WS URL / network is wrong. On a
+  dev deployment it also happens when a `wss://` endpoint's certificate hasn't been
+  accepted by the browser yet, and when a `ws://` URL lands on Keen's port 80, which
+  only redirects to https (a WebSocket upgrade never follows a redirect — this is
+  why the SDK's fallback `ws://localhost/ws-keen` fails). Check: the app is served
+  from an allow‑listed origin, the WS URL points at the right host (not `localhost`
+  from a second device), and the scheme matches the page (`ws://` on http, `wss://`
+  on https — a browser blocks `ws://` from an https page as mixed content). Working
+  local values: [`README.md`](README.md), *A local Keen stack*.
 
 - **1009 — message too big.** The standard WebSocket "message too big" close — but
   the relay sets no `maxPayload`, so `ws` only sends it above its default 100 MiB.
@@ -188,9 +203,11 @@ forced‑logout event handler fires only on an org webhook).
 | `E3002` on a send | access token expired | `setAccessToken(fresh)` — socket stays up |
 | `E3101` | agent cuid instead of slug; space/agent not authorized; missing `projectId`; **or the contract key was rotated** | slug / space fix — for a rotated contract key the token is stale: **re‑login** (`setAccessToken` from `/api/refresh` won't help) |
 | terminal `E2…` (e.g. `E2003`) | bad/duplicate request field | fix the payload; read the envelope `message` |
-| transient `E4…` / `E6002` | backpressure / stale state | none — SDK retries |
+| `runFlow` rejects on the turn's first reply (e.g. an `E4…` message) | the initial run frame was refused — never retried | send the turn again |
+| `E4…` mid‑run | backpressure on a per‑node call | none — SDK retries (10× on an `initial` node, forever on a continuation) |
+| a run that never finishes; `E6002` once a second | the run's server‑side state is gone and never comes back | cancel, then send the turn again |
 | `runFlow` rejects, "…over the …MB limit" (`FatalSendError`) | frame > 8 MB | shrink the payload (dictionary/session/script result/prompt) |
 | `runFlow` rejects, "TaskQueue cancelled" | user cancelled | expected — render a quiet "Canceled." row |
-| `onSystem` "close (code 1006)" | origin not allow‑listed / wrong WS URL or scheme | fix origin allow‑list / URL / ws‑vs‑wss |
+| `onSystem` "close (code 1006)" | origin not allow‑listed (the webhook record's `origin`) / wrong WS URL or scheme / unset `KEEN_WS` | fix the record's origin / URL / ws‑vs‑wss |
 | `onSystem` "close (code 1009)" | a frame above the relay's own `ws` cap (default 100 MiB) | shrink the payload; an 8 MB–100 MiB frame fails as `E7…` instead (see §3) |
 | HTTP 401 on `/api/chat/*` or `/api/consumer/*` | session expired | refresh or re‑login |

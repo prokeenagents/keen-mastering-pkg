@@ -161,7 +161,9 @@ then shows "your password has been changed" or the invalid/expired panel.
 
 ## Utility pages
 
-- **`/maintenance`** (`(maintanance)`) — shown by the proxy while the Keen
-  connector isn't ready.
+- **`/maintenance`** (`(maintanance)`, sic — the folder's spelling) — shown by the
+  proxy while the Keen connector isn't ready: at boot until the certificate arrives,
+  after an `r_cert_delete`, and briefly during every WAKE (see
+  [`architecture.md`](architecture.md) §5).
 - **catch‑all 404** (`(not-found)/[...not_found]`) — any unmatched URL. Note it
   resolves as a real route match, so it responds HTTP 200 (a "soft" 404).
