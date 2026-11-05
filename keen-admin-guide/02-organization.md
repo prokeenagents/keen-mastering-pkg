@@ -10,7 +10,8 @@ The organization is everything you manage: your team, your spaces and agents, an
 access. It is born from a single **owner** account and grows by **invitation** — nobody self-signs-up
 into your team. Three Organization sections in the sidebar cover this guide: **Accounts** (the
 people), **MCP Accounts** (the AI agents you let in), and **Roles** (what they're all allowed to
-touch).
+touch). All three belong to the **owner and admins**: only they see and manage them (everyone can
+still open their own profile from the avatar menu).
 
 ## Owner bootstrap — the very first account
 
@@ -50,33 +51,35 @@ that link can never dangle (an account can't point at a role that doesn't exist)
 - a human-facing **Title** (unique, up to 60 characters),
 - a **Slug** derived automatically from the title (you never type it — it's the stable id integrations
   store), and
-- two scope lists: what the role can **read** (see) and what it can **write** (change).
+- per scope, what the role can **read** (see) and what it can **write** (change).
 
 **Write implies read.** A role that can change something it can't see would be inconsistent, so
-granting **Write** on a scope always grants read too. On the permissions board this shows as two
-coupled switches per scope — **Assigned** (read) and **Write** — and Write can only turn on while
-Assigned is on; turning Assigned off clears Write with it.
+granting **Write** on a scope always grants read too. On the permissions board each scope shows four
+positions — **Read**, **Write**, **Import**, **Export** — and Write can only turn on while Read is on;
+turning Read off clears Write with it. Import and Export are switched off and not available yet.
 
-The fourteen scopes map one-to-one to the areas of the console:
+A role can grant twelve scopes, each mapping to an area of the console:
 
 | Scope | Unlocks |
 |---|---|
-| `account` | Accounts (this guide) |
-| `mcp_accounts` | MCP Accounts — the AI agents' logins (this guide) |
-| `roles` | Roles & permissions (this guide) |
 | `consumer` | Consumers → `09-consumers.md` |
 | `mcp_consumers` | MCP Consumers — the consumers an AI agent makes for itself → `09-consumers.md` |
 | `spaces`, `agents` | Spaces & agents → `03-spaces-and-agents.md` |
 | `api_keys`, `clients`, `certificates`, `contracts`, `webhooks` | API access → `05-api-access.md` |
 | `cache` | The cache controls → `07-caches.md` |
 | `logs` | Audit & activity logs |
+| `debug` ("Debugger") | Attaching the flow and script debuggers, and the Debugger page — **read only** → `10-flows-and-debugging.md` |
+
+**Accounts, MCP Accounts and Roles are not on the board:** they belong to the owner and admins by
+role, and no other role can be granted them. The compact form of a role's grants — the 15-scope,
+88-character permission string — is explained in `14-limits-and-scopes.md`.
 
 ### Create a role
 
 1. Go to **Organization → Roles → Create**.
 2. Enter a **Title** (the slug is derived for you) and press **Create** — you land on the new role's
    detail page.
-3. On the detail page, use the **permissions board**: flip **Assigned** on for each area the role
+3. On the detail page, use the **permissions board**: flip **Read** on for each area the role
    should see, and **Write** on for each area it should change. **Save**.
 
 > Titles can't be — or even contain — a protected name (`admin`, `owner`, `developer`, `default`), so
@@ -94,7 +97,8 @@ menu → **Account**). Passwords are never shown or recoverable.
 
 1. Go to **Organization → Accounts → Create**.
 2. Enter the person's **email** and pick a **role** from the select (the **owner** role is never
-   offered — you can't mint a second owner). Press **Create**.
+   offered — you can't mint a second owner — and **admin** is offered to the owner only). Press
+   **Create**.
 3. KeenAgents emails them a **confirmation link**; the account shows **New** until they finish.
 
 ### The account lifecycle: invite → confirm → active
@@ -142,19 +146,18 @@ What makes it different from a human account:
   You hand the pair to whoever sets up the agent.
 - **Name is unique and permanent.** Two MCP accounts can't share a name (a duplicate is refused), and
   the name can't be changed after creation — on the detail page it is read-only, like the ID.
-- **It can never manage people or roles.** No matter which role it holds — even `admin` — an MCP
-  account cannot create, change or delete human accounts, roles, or other MCP accounts. Only a
-  **human** with the `mcp_accounts` write scope manages MCP accounts. (With `mcp_accounts` read it *may*
-  list and view them, so a bot can check whether one exists.)
+- **It is never owner or admin, and it never manages people or roles.** An MCP account can hold any
+  role except **owner** and **admin**, so it can never see or change human accounts, roles, or other
+  MCP accounts. Only a **human** owner or admin manages MCP accounts.
 - **It cannot make people-consumers either** — it can only *view* normal consumers; the consumers it
   is allowed to create are its own **MCP consumers** (`09-consumers.md`).
 
 ### Create an MCP account
 
-1. Go to **Organization → MCP Accounts → Create** (the section is visible with the `mcp_accounts`
-   read scope; creating needs write).
+1. Go to **Organization → MCP Accounts → Create** (the section is visible to the owner and admins
+   only).
 2. Enter a **Name** (unique across MCP accounts — choose it well, it can't be changed later), pick a
-   **Role** (any role except **owner**), and leave **Enabled** on. Create.
+   **Role** (any role except **owner** and **admin**), and leave **Enabled** on. Create.
 3. A **one-time secret panel** appears: the account's **ID** and its **secret**, each with a copy
    button. **Copy both now** — the secret is never shown again. Then click
    **I have copied it — open the account**.
@@ -163,20 +166,19 @@ What makes it different from a human account:
 
 ### The detail page: Save, Rotate Secret, Delete
 
-- **Role** — change it and **Save**. The change applies at the account's **next token refresh /
-  authentication** (the agent's equivalent of "next login") — unlike a person, a bot is not kicked
-  out mid-session.
+- **Role** — change it and **Save**. A real change **ends the agent's current session**: its next
+  token renewal is refused, so within about **10 minutes** (the life of the token it already holds)
+  it has to sign in again through the Keen MCP server — and from then on it works with the new role.
 - **Enabled** switch — turn it **off** to freeze the agent: a disabled account cannot authenticate or
-  use the MCP server at all, without deleting anything. Turn it back on to let it in again. Save.
+  use the MCP server at all, without deleting anything, and its current session ends the same way.
+  Turn it back on to let it sign in again. Save.
 - **Rotate Secret** — mints a **new** secret and shows it once (the same one-time panel). The **old
-  secret stops working immediately**, so hand the new one to the agent straight away. Use it when a
-  secret leaks or was lost — there is no "show me the secret again." A rotate only retires the
-  secret: a session already signed in with it keeps renewing itself. If the secret **leaked**,
-  delete the account and create a fresh one (new ID + secret) — that ends every session at once;
-  switching **Enabled** off blocks such a session only for as long as it stays off.
+  secret stops working immediately** and the agent's current session ends too, so hand the new one
+  to the agent straight away. Use it when a secret leaks or was lost — there is no "show me the
+  secret again."
 - **Delete** — two-step (Delete → Confirm). Revokes the credential on the spot: no new sign-in and no
-  token refresh will succeed (a token the agent already holds runs out on its own within about a
-  minute).
+  token refresh will succeed (a token the agent already holds runs out on its own within about 10
+  minutes).
 
 > **Why a separate kind of account at all?** An AI agent shouldn't hold a person's email and
 > password, and it shouldn't be able to quietly grant itself more power. Giving it its own
@@ -198,14 +200,15 @@ Two timing rules worth knowing:
   **immediately**: everyone holding that role (or that one person) is **signed out on the spot** and
   sees *"Your access changed — please sign in again."* on the login page; the new permissions are
   issued when they sign back in. Warn people before you save a role in the middle of their work.
-  (For an MCP account there is no kick-out: it picks the change up at its next token refresh /
-  authentication.)
+  (An MCP account holding that role loses its session too: within about 10 minutes it has to sign in
+  again through the Keen MCP server, and then carries the new permissions.)
 - **Role deletion** is immediate too: every account holding the deleted role — human **and** MCP — is
   moved to the **default** role, and the people are **signed out** on the spot, in one atomic step.
 
 One rule sits above roles: an **MCP account** can never manage human accounts, roles, or MCP accounts,
-**whatever its role says** — even `admin`. That is not a scope you can grant; it's how MCP accounts
-work. Humans with the `mcp_accounts` scopes manage MCP accounts (see above).
+**whatever its role says** — it can never hold `owner` or `admin`, and no other role can be granted
+those areas. That is not a scope you can grant; it's how MCP accounts work. Human owners and admins
+manage MCP accounts (see above).
 
 ## Protected roles
 
@@ -213,8 +216,9 @@ Four roles ship with every organization and **cannot be deleted**: **owner**, **
 **default**. Of these, `owner`/`admin`/`default` can't be edited at all; `developer` allows permission
 edits but keeps its title locked. `default` is also the landing role for anyone whose role was deleted.
 Owner and admin **accounts** are protected too — an admin can't act on an owner or another admin
-(no reset, no delete, no role change), only the owner can reset or delete an admin account, and even
-the owner can't change the owner account's role.
+(no reset, no delete, no role change), only the owner can reset, delete or re-role an admin account,
+and even the owner can't change the owner account's role. Nobody can change **their own** role: on
+your own account the role select is locked (badge `your account — role locked`).
 
 ## Watch out for
 
@@ -236,12 +240,12 @@ the owner can't change the owner account's role.
   those people out. Check who holds a role before deleting it.
 - **Names are the user's, not yours.** First/last name are set at confirmation and can't be edited from
   the admin surface — the person edits their own under avatar menu → **Account**.
-- **An MCP account's secret is shown once** — at creation and after each **Rotate Secret**. Lost it?
-  Rotate; the old one dies the moment you do, so pass the new one on immediately. Leaked it? Delete
-  and re-create the account — a rotate alone doesn't end a session already open with the old secret.
+- **An MCP account's secret is shown once** — at creation and after each **Rotate Secret**. Lost or
+  leaked it? Rotate; the old one dies the moment you do and the session opened with it ends too, so
+  pass the new one on immediately.
 - **An MCP account's name is unique and can't be changed.** A duplicate name is refused at create; a
   typo means delete and re-create (new ID, new secret) — so name it carefully.
 - **MCP accounts can't manage MCP accounts** (or people, or roles), no matter their role. If a bot
-  "can't create an account," that's by design — a human with `mcp_accounts` write does it.
+  "can't create an account," that's by design — a human owner or admin does it.
 - **Enabled off = the agent is locked out** until you switch it back on. Check it before suspecting a
   broken secret.

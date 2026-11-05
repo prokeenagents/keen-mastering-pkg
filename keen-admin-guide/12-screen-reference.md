@@ -28,6 +28,15 @@ always a missing role scope, not a bug.
 
 ---
 
+## Home page
+
+The console's start page (`/`). It says the instance is
+a sandbox for building and testing, and carries three download buttons: **Download Ext** (the Shira
+Flow Builder VS Code extension — 0.0.4, the version the debuggers need), **Download Site** (the
+reference partner site, a zip) and **Download Toolkit** (the Keen Mastering toolkit, a zip).
+
+---
+
 ## Organization → Accounts
 
 **List page** (`Account List`). Columns: `Name`, `Email`, `Role`, `Status`, `Created At`, and a
@@ -40,30 +49,33 @@ cell shows a `New` badge (unconfirmed) or `Active` badge (confirmed). Footer cou
 
 **Create form** (card `Account Details`). Fields: `Email` (required, placeholder
 `user@company.com`) and `Role` (a select, placeholder `Select a role`; the `owner` role is never
-offered). Submit button: `Create`. On success it opens the new account's detail page.
+offered, and `admin` only to the owner). Submit button: `Create`. On success it opens the new
+account's detail page.
 
-**Detail page** (card `Role & Access`). Badges at the top show the role, `Active`/`New`, and — for
-platform accounts — `protected — read only` (owner) or `protected — role locked` (admin). Fields:
-`Email` (read-only), `Name` (read-only; shows `— not confirmed yet —` until the user sets it), and
-`Role` (the one editable field). Footer buttons (writers only): `Save`, `Reset Password` (only for a
-**confirmed** account that isn't the owner), and `Delete` → `Confirm delete` + `Cancel`. The owner is
-fully locked; admin has its role select locked, and its `Reset Password` / `Delete` work only for the
-owner — an admin pressing them on another admin is refused. **No copy buttons on this page.**
+**Detail page** (card `Role & Access`). Badges at the top show the role, `Active`/`New`, `Blocked`
+(red) on an account blocked from signing in, and the locks: `protected — read only` (owner),
+`protected — role locked` (an admin, for anyone but the owner) or `your account — role locked` (your
+own — nobody changes their own role). Fields: `Email` (read-only), `Name` (read-only; shows
+`— not confirmed yet —` until the user sets it), and `Role` (the one editable field). Footer buttons
+(owner and admins only): `Save`, `Reset Password` (only for a **confirmed** account that isn't the
+owner), and `Delete` → `Confirm delete` + `Cancel`. The owner is fully locked; an admin account's
+role, `Reset Password` and `Delete` work only for the owner — an admin pressing them on another admin
+is refused. **No copy buttons on this page.**
 
 ---
 
 ## Organization → MCP Accounts
 
 Logins for **AI agents**, not people (`02-organization.md`). The sidebar entry sits between Accounts
-and Roles and appears with the `mcp_accounts` **read** scope; creating, saving, rotating and deleting
-need its **write** scope. Only humans use this page — the console refuses an MCP account's token here
-outright (an MCP agent can *list* MCP accounts through the MCP server, never change one).
+and Roles and appears for the **owner and admins** only — no role can be granted it. Only humans use
+this page — the console refuses an MCP account's token here outright, and an MCP account cannot read or
+change MCP accounts through the MCP server either.
 
 **List page.** Columns: `Name`, `Role`, `Enabled`, `Created`, `Last login`, and a `Link` (Visit). The
 `Create MCP Account` button lives on the landing page's create card.
 
 **Create form.** Fields: `Name` (required; **unique** across MCP accounts and **permanent** — it can't
-be changed afterwards), `Role` (a select; the `owner` role is never offered), and an `Enabled` switch
+be changed afterwards), `Role` (a select; `owner` and `admin` are never offered), and an `Enabled` switch
 (on by default). Submit: `Create`. Afterward the form is replaced by a **one-time secret panel**
 (`MCP secret — shown once`): the account's `MCP Account ID` and its `MCP Secret`, each with a copy
 button, and the button `I have copied it — open the account`. **Copy the secret here — it is never
@@ -71,12 +83,12 @@ shown again.**
 
 **Detail page.** Read-only `MCP Account ID` (copy icon) and read-only `Name`; an editable `Role`
 select; an `Enabled` switch (off = the account cannot authenticate or use the MCP server); a
-`Last login` badge showing when the agent last signed in. Footer (writers only): `Save` (role /
-enabled — a role change applies at the account's next authentication), `Rotate Secret` (**a single
-click — no confirm step**: it mints the new secret on the spot and shows the same one-time panel,
-dismissed with `I have copied it — back to the account`; the old secret stops working immediately,
-though a session already signed in with it keeps renewing — `02-organization.md`), and `Delete` →
-`Confirm delete` + `Cancel`.
+`Last login` badge showing when the agent last signed in (`Never used` before the first). Footer
+(owner and admins): `Save` (role / enabled — a role change or a switch to off ends the agent's
+session; it signs in again), `Rotate Secret` (**a single click — no confirm step**: it mints the new
+secret on the spot and shows the same one-time panel, dismissed with
+`I have copied it — back to the account`; the old secret stops working immediately and the agent's
+session ends — `02-organization.md`), and `Delete` → `Confirm delete` + `Cancel`.
 
 ---
 
@@ -93,11 +105,13 @@ opens the new role.
 
 **Detail page** (card `Role & Permissions`). Badge `protected — read only` for built-in roles,
 `protected — title locked` for `developer`. Field `Title`, then a **Permissions** section: the
-**permissions board**, one row per area with two coupled switches — `Assigned` (grants read) and
-`Write`. `Write` is disabled until `Assigned` is on; turning `Assigned` off clears `Write`. The
-fourteen rows are: `Accounts`, `Consumers`, `Roles`, `Spaces`, `Agents`, `API Keys`, `Clients`,
-`Certificates`, `Contracts`, `Webhooks`, `Cache`, `Logs`, `MCP Accounts`, `MCP Consumers` (each with
-a one-line description of what read vs write grants). Footer (writers only): `Save` and `Delete` →
+**permissions board**, one row per area with four switches — `Read`, `Write`, `Import`, `Export`.
+`Write` is disabled until `Read` is on; turning `Read` off clears `Write`. `Import` and `Export` are
+always off and disabled (*not available yet*). The twelve rows are: `Consumers`, `Spaces`, `Agents`,
+`API Keys`, `Clients`, `Certificates`, `Contracts`, `Webhooks`, `Cache`, `Logs`, `MCP Consumers`,
+`Debugger` (each with a one-line description of what read vs write grants); `Debugger` is read only —
+its `Write` switch is disabled and captioned *Not used*. Accounts, Roles and MCP Accounts have no row:
+they are the owner's and admins' by role. Footer (writers only): `Save` and `Delete` →
 `Confirm delete` + `Cancel`. `admin` / `owner` / `default` are fully locked; `developer`'s title is
 locked but its scopes stay editable. None of the four built-in roles can be deleted — the `Delete`
 button doesn't render for them.
@@ -111,8 +125,8 @@ whose cell reads **Visit**. No filter panel — sort via the headers. Empty stat
 `Create Space` button is on the Spaces landing page.
 
 **Create form** (card `Space Details`). Fields: `Title` (required, placeholder `Enter Space Title`)
-and `Description` (required, placeholder `What is this space for?`) — both must be unique. Submit:
-`Create`.
+and `Description` (required, placeholder `What is this space for?`) — the title must be unique, the
+description may repeat. Submit: `Create`.
 
 **Detail page** (card `Space Configuration`). Editable fields `Title` and `Description`. Then two
 read-only fields, each with its own copy icon and (for the token) a reset button:
@@ -219,9 +233,9 @@ refresh a token). Name, contract and spaces are never editable here — only an 
 those, through the MCP server. Footer (`mcp_consumers` writers only): `Save` (the Enabled switch),
 `Rotate Secret` (**a single click — no confirm**; it mints the new secret on the spot and shows a
 **one-time secret panel** — the `MCP Consumer ID` and the new secret, each with a copy button, the
-same reveal-once panel as MCP Accounts; the old secret stops working immediately, though a session
-the agent already holds keeps refreshing; `I have copied it — back to the consumer` returns to the
-form), and `Delete` → `Confirm delete` + `Cancel`.
+same reveal-once panel as MCP Accounts; the old secret stops working immediately and every session
+of the consumer ends; `I have copied it — back to the consumer` returns to the form), and `Delete` →
+`Confirm delete` + `Cancel`.
 
 ---
 
@@ -285,21 +299,25 @@ Below the form, a **Rotate Secret** card (writers): a `Rotate Secret` button →
 
 ## Api → Certificates
 
-**List page** (`Certificate List`). Columns: `Name`, `ID`, `Folder ID`, `Secret Key` (badge `Set` /
-`Unset`), `Bound API Key` (or `—`), `Created At`, and a `Link` (Visit). Empty state:
-`No certificates yet.` The `Create Certificate` button is on the Certificates landing page.
+**List page** (`Certificate List`). Columns: `Name`, `ID`, `Folder ID`, `Bound API Key` (or `—`),
+`Created At`, and a `Link` (Visit). Empty state: `No certificates yet.` The `Create Certificate`
+button is on the Certificates landing page.
 
 **Create form** (card `Certificate Details`). `Name` (required, placeholder `Enter Certificate Name`)
-and an optional `Secret Key` field with a **`Generate`** button (dice icon) beside it — the shared
-symmetric secret both sides hold; leave it empty and the certificate has **no** secret key (the list
-shows `Unset`, and consumer tokens are then sealed with a fixed built-in key anyone can open — set
-one, `05-api-access.md`). Submit: `Create`. **Nothing here is reveal-once** — the secret stays an editable
-field.
+and a **required** `Secret Key` field (16–32 characters), pre-filled with a generated key, with a
+**`Generate`** button (dice icon) beside it for a new one — the shared symmetric secret both sides
+hold. Submit: `Create`. The form is then replaced by a **reveal-once panel** headed
+`Certificate "<name>" created`: the alert `Copy the secret key now`, the key in a `Secret Key` field
+with a `Copy secret key` icon, and buttons `Open Certificate` / `Back to list`. **This is the only
+time the secret key is shown.**
 
-**Detail page** (card `Key Material`). `Name`; `Secret Key` (with a `Copy secret key` icon and a
-`Generate` button; leave empty to keep the current one); `Public Key` (a read-only PEM textarea with a
+**Detail page** (card `Key Material`). `Name`; `Secret Key` — always empty (placeholder
+`Hidden — leave empty to keep the current key`; the stored key is never read back), with a
+`Generate` button: type or generate a value and `Save` to replace the key, leave it empty to keep it;
+`Public Key` (a read-only PEM textarea with a
 `Copy public key` icon — the private half never leaves the platform); a **Rotate Key Material** block
-with a `Rotate` button → `Confirm rotate` + `Cancel`; read-only `Folder ID` (`Copy folder ID`) and
+with a `Rotate` button → `Confirm rotate` + `Cancel` (it renews the key pair only — the secret key is
+untouched and not shown); read-only `Folder ID` (`Copy folder ID`) and
 `Certificate ID` (`Copy certificate ID`). Footer: `Save`, `Rebuild Resource Cache`, `Delete` →
 `Confirm delete` + `Cancel`.
 
@@ -355,9 +373,9 @@ button is on the Webhooks landing page.
 **Create form** (card `Delivery Target`). `Name` (required, placeholder `Enter Webhook Name`),
 `Origin` (required, placeholder `https://partner.example.com` — matched **exactly**, `scheme://host[:port]`,
 no path, no trailing slash; the port matters), and `Webhook URL` (required, placeholder
-`https://partner.example.com/api/keen-webhook` — the reference site needs its secret appended:
-`…/api/keen-webhook/<KEEN_WEBHOOK_SECRET>`). Created **unassigned** — an api key claims it from
-the key's own form. Submit: `Create`.
+`https://partner.example.com/api/keen-webhook` — an `https://` address of a public host; the
+reference site needs its secret appended: `…/api/keen-webhook/<KEEN_WEBHOOK_SECRET>`). Created
+**unassigned** — an api key claims it from the key's own form. Submit: `Create`.
 
 **Detail page** (card `Target & Binding`). A read-only `Api Key` binding panel (the key holding it, or
 `Unassigned`), read-only `Webhook ID` (`Copy Webhook ID`), editable `Name`, `Origin`, and
@@ -436,6 +454,35 @@ logs.` The `Create Log Record` button lives on this page's create card (writers 
 
 ---
 
+## System → Debugger
+
+Switches the sandbox's flow and script debuggers on and off and shows how to connect
+(`10-flows-and-debugging.md`). The sidebar entry appears with the **Debugger** (`debug`) **read** scope;
+the owner and admins always see it. The page title `Debugger` carries a badge — `Debugger on` /
+`Debugger off`; while off, a non-admin reads *"The debugger is off: it refuses every connection. Ask
+the owner or an admin to switch it on."*
+
+- **`Control`** card (**owner and admins only**; every change is recorded in the audit log): the switch
+  `Debugger switched on` with a `Last changed by … · <time>` line (`Never switched yet` at first) — off by
+  default; switching it off closes every open session and resumes every paused run. Below it, **`Kill
+  debugger connections and resume`** — button `Kill and resume` (disabled while the debugger is off) →
+  confirm dialog `Kill all debugger connections?` (`Cancel` or confirm). It disconnects every attached
+  VS Code and resumes every paused run; the debugger stays on. The result shows `Sessions closed`,
+  `Runs resumed` and `Instances answered`, a warning for any service that did not answer within
+  2 seconds (it still picks the change up), and a table `Service` · `Instance` · `Sessions closed` ·
+  `Runs resumed`. Switching off shows the same result.
+- **`Connect from VS Code`** card (everyone who sees the page): the role needs the Debugger permission;
+  add `user` and `password` to `.vscode/keen.json` (a sample with placeholders only — `server`,
+  `space`, `token`, `user`, `password` — and the warning that the file holds your password and the
+  deployment token: keep it in `.gitignore` and never commit it); then Start Flow Debugger or Script
+  Debugger from the Keen extension (0.0.4 or newer), which connects over HTTPS on the server's
+  address. The console never shows a debug link, a ticket or a token — the extension signs in for
+  you.
+- **`Good to know`** card: a run paused at the same point for 15 minutes resumes by itself; a session ends
+  when the role loses the Debugger permission, the password changes, or the debugger is switched off.
+
+---
+
 ## Watch out for
 
 - **A control you can't use isn't greyed — it's gone.** Missing buttons or whole sections almost
@@ -452,9 +499,9 @@ logs.` The `Create Log Record` button lives on this page's create card (writers 
   on the first click.
 - **Reveal-once panels are your only chance.** The plaintext **api key** (on create and on rotate),
   the **client secret**, an **MCP account's secret** (on create and on `Rotate Secret`), and an
-  **MCP consumer's secret** (on `Rotate Secret`) appear exactly once. Copy them the moment they
-  show; lost means rotate, never recover. (Certificate secrets are *not* reveal-once — they stay
-  editable.)
+  **MCP consumer's secret** (on `Rotate Secret`) and a **certificate's secret key** (on create)
+  appear exactly once. Copy them the moment they show; lost means rotate (for a certificate: type or
+  generate a new secret key and save), never recover.
 - **Some pages have fewer buttons on purpose.** *Ai → MCP Consumers* is view-only for every human
   **except** three lifecycle controls — the `Enabled` switch (`Save`), `Rotate Secret` and `Delete`
   (with `mcp_consumers` write); there is no `Create`, and name, contract and spaces stay read-only —

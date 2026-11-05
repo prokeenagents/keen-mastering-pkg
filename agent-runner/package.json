@@ -8,7 +8,9 @@
         "node": ">=20"
     },
     "scripts": {
-        "start": "tsx run.ts"
+        "start": "tsx run.ts",
+        "debug": "tsx debug.ts",
+        "test": "node --import tsx --test test/*.test.ts"
     },
     "dependencies": {
         "dotenv": "^17.4.2",

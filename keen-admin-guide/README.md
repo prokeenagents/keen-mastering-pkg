@@ -158,8 +158,9 @@ needs an **MCP account** — a human creates it under Organization → MCP Accou
 2. **Create the Agent** → `03-spaces-and-agents.md`. It is created **under / assigned to the space**
    from step 1. Remember its **Start Flow**, **Start Node**, **agent name** and **Agent ID (slug)** —
    4–60 lowercase letters and single dashes, unique across the organization.
-3. **Create the Client Certificate** → `05-api-access.md` — with a **Secret Key** (16–32 characters
-   or **Generate**). Remember its **ID**.
+3. **Create the Client Certificate** → `05-api-access.md` — its **Secret Key** (16–32 characters) is
+   required; the form pre-fills a generated one. It is shown **once**, right after **Create** (the
+   partner site receives it later through the certificate delivery). Remember the certificate's **ID**.
 4. **Create the Client** → `05-api-access.md`. Remember its **ID + Secret** (the secret is shown once).
 5. **Create the Contract** → `05-api-access.md`. Remember its **ID**.
    - **5.1** On the contract's detail page: in the **Spaces** card tick **Assigned** for the space
@@ -192,9 +193,9 @@ needs an **MCP account** — a human creates it under Organization → MCP Accou
    - **6.4** Tunnel **that** port: `ngrok http <port>`, and take the URL it prints
      (`https://<your-tunnel>.ngrok-free.app` — placeholder). This is the `<ngrok URL>` below.
 7. **Create the Webhook** → `05-api-access.md`: **Origin** = `<ngrok URL>`, **Webhook URL** =
-   `<ngrok URL>/api/keen-webhook/<KEEN_WEBHOOK_SECRET>` (Keen does not sign its webhooks, so the
-   site accepts a delivery only with its secret in the path; treat this URL as a secret).
-   Remember its **Webhook ID**.
+   `<ngrok URL>/api/keen-webhook/<KEEN_WEBHOOK_SECRET>` (an `https://` address; Keen signs every
+   delivery, but the reference site today accepts one by the secret in its path, so treat this URL
+   as a secret). Remember its **Webhook ID**.
 8. **The Api Key** — already created in 6.1.
    - **8.1** **Bind ALL the resources created so far** to it — the certificate (3), client (4),
      contract (5) and webhook (7): open the key (Api → Api Keys → the key), set the four pickers
@@ -215,9 +216,9 @@ needs an **MCP account** — a human creates it under Organization → MCP Accou
 15. **Test prompt** → `../keen-mcp-guide/README.md`.
 
 Afterwards, whenever you change anything bound to the key, repeat **10 → 10.1** (one Rebuild, one
-Wake) — `07-caches.md`, `08-wake.md`. It is the always-safe routine: after most saves the Rebuild is
-redundant (the copy refreshed itself) but harmless, after a **Webhook** edit it is required, and the
-Wake is the only thing that tells the partner about a space or agent change.
+Wake) — `07-caches.md`, `08-wake.md`. It is the always-safe routine: after a save the Rebuild is
+redundant (the copy refreshed itself) but harmless, and the Wake is the only thing that tells the
+partner about a space or agent change.
 
 **When the ngrok URL changes** (a free tunnel gets a new URL when it restarts), the URL lives in four
 places and all four move together — `06-connect-a-partner-site.md`, *Watch out for*.
@@ -236,11 +237,11 @@ places and all four move together — `06-connect-a-partner-site.md`, *Watch out
 - **`07-caches.md`** — the served-configuration cache: what, how, why, the admin controls, and the api-key Rebuild that refreshes everything bound to a key in one click.
 - **`08-wake.md`** — the Wake button: what it does, notify-then-fetch, when to use it, and the one-Rebuild-one-Wake sequence.
 - **`09-consumers.md`** — consumers (end users): registration, authentication, self-service; plus MCP consumers (the ones an AI agent makes for itself — humans can disable, rotate or delete them here, not create).
-- **`10-flows-and-debugging.md`** — what flows are (authoring has its own dedicated guide, `../shira-flow-builder-guide/README.md`) and source-level debugging.
+- **`10-flows-and-debugging.md`** — what flows are (authoring has its own dedicated guide, `../shira-flow-builder-guide/README.md`) and source-level debugging — the Debugger page (the on/off switch and Kill & Resume for the owner and admins), the Debugger permission, the 15-minute auto-resume.
 - **`11-troubleshooting.md`** — the recurring operational gotchas and their fixes.
 - **`12-screen-reference.md`** — a screen-by-screen map of every admin page: the panels, fields, table columns and exact button labels, so you can point someone straight at a control.
 - **`13-deletions.md`** — what happens when you delete each resource: what cascades, what only unbinds, what's protected, and what can't be undone.
-- **`14-limits-and-scopes.md`** — the numbers: how many of each resource you can create and every field's format/length cap, plus what a role's read vs write actually unlocks per scope (all 14 scopes).
+- **`14-limits-and-scopes.md`** — the numbers: how many of each resource you can create and every field's format/length cap, plus what a role's read vs write actually unlocks per scope (the 12 grantable scopes, `debug` included) and how to read the 88-character permission string.
 
 ---
 

@@ -260,12 +260,12 @@ CONFIG (flag first, then .env in the working dir)
                                 — the WS endpoint derives: wss://<host>/ws-keen
   --space    / KEEN_SPACE_ID    the AI space id (required)
   --agent    / KEEN_AGENT       the agent SLUG (not the row id) (required)
-  --token    / KEEN_TOKEN       a consumer access_token (required; token-only auth)
+  --token    / KEEN_TOKEN       a consumer access_token (required; token-only auth; it lives 10 minutes)
   --user-id  / KEEN_USER_ID     the consumer id — relay enforces userId === the token's sealed sub
   --email    / KEEN_EMAIL       identity email (presence-checked; defaults to the token's email claim)
   --origin   / KEEN_ORIGIN      Origin header — must equal the origin on the webhook record bound to the
                                 api_key (the relay's allow-list), else the upgrade is refused
-  --prompt   / KEEN_PROMPT      the user turn (required, per-run; the env var is only a fallback)
+  --prompt   / KEEN_PROMPT      the user turn (required, per-run; the env var is only a fallback; at most 20 000 characters)
   --chat-id  / KEEN_CHAT_ID     reuse a chat id to continue a conversation (default: a fresh one)
   --cookie name=value           a cookie the flow's script nodes should see, read via
                                 system/cookies (repeatable). Also KEEN_COOKIES="a=1;b=2"
@@ -286,8 +286,10 @@ OUTPUT
 
 EXIT CODES
   0  the run settled (check the summary's endReached)
-  1  the run failed (socket closed, auth / input error, retries exhausted, cancel)
-  2  bad arguments / configuration
+  1  the run failed (auth / input error, a refused run frame, cancel, or a lost
+     connection: the server no longer holds the flow, taken over by another
+     session, or a Keen server that cannot resume a flow)
+  2  bad arguments / configuration, or a prompt over the server's limit (20 000 characters, E2101)
 
 For a self-signed dev cert, prefix the command with NODE_TLS_REJECT_UNAUTHORIZED=0.
 Full docs: agent-runner/README.md · agent-runner/docs/USAGE.md
@@ -374,9 +376,33 @@ async function main(): Promise<void> {
     }
 
     // projectID defaults to the space id (space id === project id).
-    const chat = new ChatAPI({ url, spaceID, agentID, userId, email, projectID: spaceID, accessToken, cookies: parseCookies(process.argv.slice(2)) });
+    // onAuthExpired answers null: the CLI cannot mint a token, so a token refused mid-run (it lives 10 minutes) ends
+    // the run with `Invalid token` (exit 1) instead of a resume that waits for ever for a token that never comes.
+    const chat = new ChatAPI({
+        url,
+        spaceID,
+        agentID,
+        userId,
+        email,
+        projectID: spaceID,
+        accessToken,
+        cookies: parseCookies(process.argv.slice(2)),
+        onAuthExpired: async () => null
+    });
 
     chat.onStream((event, data, requestId) => emit.stream(event, data, requestId));
+
+    // A dropped socket reconnects and resumes the running flow (Keen 15.3).
+    // Print the SDK's reconnect / resume lines as meta (they never carry a token or the
+    // resume handle). A resume refused `token` ends the run with `Invalid token` (onAuthExpired → null).
+    chat.onSystem(line => {
+        if (/^(close \(code \d+[^)]*\) — |resumed — |resume refused |no frame for |token refresh failed )/.test(line)) {
+            emit.meta(line);
+            if (line.startsWith('resume refused (token)')) {
+                emit.meta('the access token expired or was revoked — the CLI cannot refresh it; rerun with a fresh KEEN_TOKEN');
+            }
+        }
+    });
     chat.connect();
 
     // Ctrl+C = STOP THE FLOW, not just kill the client: sendCancel tells the relay
@@ -390,10 +416,12 @@ async function main(): Promise<void> {
         cancelling = true;
         emit.meta('SIGINT — cancelling flow on the engine');
         try {
-            chat.sendCancel();
+            // cancel() sends the cancel frame now, or right after the resume while reconnecting.
+            chat.cancel();
         } catch {
             // best-effort — we exit regardless
         }
+        // disconnect() also cancels a still-running flow first, then closes 1000.
         chat.disconnect();
         setTimeout(() => process.exit(130), 300);
     });
@@ -439,12 +467,20 @@ async function main(): Promise<void> {
         });
         emit.meta(`ready — cid ${cid}`);
 
-        const tree = await chat.runFlow({ chatId, prompt });
-        emit.meta(`run complete — ${tree.size} flow bundle(s)`);
-        for (const [key, bundle] of tree) {
-            emit.node(key, bundle);
+        // The platform's prompt limit (welcome.limits.promptChars; an older server sends none). The server's
+        // check (E2101) is the rule; refusing here sends nothing and names the fix.
+        const promptLimit = chat.getPromptLimit();
+        if (promptLimit !== null && prompt.length > promptLimit) {
+            emit.summary(false, new Map(), `the prompt is ${prompt.length} characters — the limit is ${promptLimit} (E2101); shorten it`);
+            code = 2;
+        } else {
+            const tree = await chat.runFlow({ chatId, prompt });
+            emit.meta(`run complete — ${tree.size} flow bundle(s)`);
+            for (const [key, bundle] of tree) {
+                emit.node(key, bundle);
+            }
+            emit.summary(true, tree);
         }
-        emit.summary(true, tree);
     } catch (err) {
         code = 1;
         const message = err instanceof Error ? err.message : String(err);

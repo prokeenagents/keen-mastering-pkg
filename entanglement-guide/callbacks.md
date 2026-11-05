@@ -98,9 +98,10 @@ instance.onSystem(text => { … });
 These are **diagnostics**, not chat content. Wire `onSystem` to a log/console for
 debugging connectivity; never render it as the agent's answer. In entanglement the
 chat shell doesn't subscribe to it at all — the connection state the user sees
-comes from `onStatus` instead. The shell also never reconnects on its own: after a
-close the status stays `disconnected` and Send stays off until the page is
-reloaded.
+comes from `onStatus` instead. This SDK does **not** reconnect after a close: the
+status stays `disconnected` until the page builds a new client
+([`chat-sdk.md`](chat-sdk.md) §5; the 15.3 SDK's reconnect / resume lines are in
+§8 there).
 
 ---
 
@@ -113,10 +114,14 @@ type StatusHandler = (status: ConnectStatus) => void;
 instance.onStatus(status => setStatus(status));
 ```
 
-Fires synchronously on each socket transition. The chat UI drives everything off
-it: the chat header and the prompt box show the status, and Send is gated on
-`connected`.
-(`'unauthorized'` is a reserved state for a future server‑side auth‑close.)
+Fires synchronously on each socket transition: `connecting` on `connect()`,
+`connected` when the socket opens (before the `welcome` frame — gate a first send
+on `whenReady()` when that matters), `disconnected` on any close. The chat UI
+drives everything off it: the chat header and the prompt box show the status, and
+Send is gated on `connected`. (`'unauthorized'` is a reserved state for a future
+server‑side auth‑close.) The 15.3 SDK adds `'reconnecting'` and an `onResume`
+callback ([`chat-sdk.md`](chat-sdk.md) §8); a `switch` written for it must handle
+the extra state.
 
 ---
 
@@ -182,5 +187,5 @@ does not use it.
 | `onSystem` | socket‑level events | `text` | connectivity **diagnostics** (open/close/error/parse); WS close codes (e.g. 1006) |
 | `onStatus` | socket transitions | `ConnectStatus` | connection UI + the Send gate |
 | `onRunning` | run start / settle | `boolean` | the Send/Stop gate; per‑turn row reset; list refresh on settle |
-| `onWelcome` | once per connection | `{ correlationID }` | gate on the connection being ready |
+| `onWelcome` | the `welcome` frame of a socket | `{ correlationID }` | gate on the connection being ready |
 | `onResponse` | frames **with** an envelope | `(envelope, requestId)` | log/stats panels (advanced) |

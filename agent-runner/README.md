@@ -37,6 +37,7 @@ Two of the three steps are **compiled Go binaries** and one is a TypeScript runn
 | **`keen-validate`** | Go | A static analyzer — no runtime, no browser. Ships as one prebuilt binary, needs no `npm install` and no Go toolchain. |
 | **`keen-deploy`** | Go | An uploader (connect → zip → POST). Native `archive/zip` + `net/http`, so Windows/macOS/Linux all work with no external `zip`. One prebuilt binary. |
 | **`run.ts`** | TypeScript | Drives the ChatSDK / **TaskQueue** — the same WebSocket run-orchestration the browser (entanglement / Shira canvas) uses. That is the one piece that stays TS; everything the browser doesn't need is Go. |
+| **`debug.ts`** | TypeScript | Outside the loop: a one-time attach address for the flow / script debugger (login → debug ticket → logout, from `.vscode/keen.json`) when you attach by hand instead of through the VS Code extension. See [Debug](#debug-a-manual-attach). |
 
 ### Install the binaries (once — prebuilt, no Go needed)
 
@@ -94,21 +95,32 @@ npx tsx run.ts \
 - `t:"flow"` `endReached` — `true` when the flow's End node answered `{ final: true }`; `false` when an unwired output ended it. Exit `0` alone does not tell you the flow reached End.
 - `t:"summary"` — the last line: `ok`, how many flow bundles, how many reached End, and `error` on a failure (the partial tree is printed before it).
 - Credentials are printed as `"<redacted>"` (the SDK stamps the live `access_token` on every bundle), and stdout holds only these lines — SDK console output goes to stderr.
-- `t:"meta"` — runner notes (connect, completion, failures). Exit code `0` the run settled · `1` failed run · `2` bad args · `130` cancelled with Ctrl+C.
+- `t:"meta"` — runner notes (connect, completion, failures, and a dropped socket's `close (code …) — reconnecting in … s (attempt n)` / `resumed — correlationID … after … s` / `resume refused (…)` lines: the SDK reconnects and resumes the running flow by itself, Keen 15.3 — see [docs/USAGE.md](./docs/USAGE.md#a-dropped-connection)). Exit code `0` the run settled · `1` failed run · `2` bad args (or a prompt over the 20 000-character limit) · `130` cancelled with Ctrl+C.
+
+## Debug (a manual attach)
+
+The Keen VS Code extension signs in and connects the flow and script debuggers for you. For any other client, `debug.ts` prints the same one-time attach address:
+
+```bash
+npx tsx debug.ts --kind=flow   --project ./my-flow-project    # https://<server>/keen-debug/flow/dbg/<ticket>
+npx tsx debug.ts --kind=script --project ./my-flow-project    # wss://<server>/keen-debug/script/dbg/<ticket>/ws + a launch.json configuration
+```
+
+It reads `server`, `space`, `user` and `password` from the project's `.vscode/keen.json`, signs in to the org API, asks for a debug ticket for that `space` and **always** signs out again. Since Keen 15.3 the debuggers are on the server's HTTPS address (`/keen-debug/<kind>/…`); a probe finds that out, and an older server without it is reached on its ports `:7101` / `:7100` instead (`keen.json` `debugHost` overrides the host for those). A breakpoint stops only runs of that space, and only the scripts / flow nodes it is set on; every other run runs normally. One debugger window per kind at a time (a second is closed with `Debugger in use`). The address is valid for **one connection within 5 minutes**. It needs the debugger switched on (the console's Debugger page, owner/admin) and a role with the Debugger permission. The password and the tokens are never printed; `keen.json` is a local secrets file — git-ignored, never committed. Exit `0` printed · `1` refused or failed · `2` bad arguments. See [docs/DEBUG.md](./docs/DEBUG.md).
 
 ## The two channels
 
 | Need | Channel |
 |---|---|
 | The agent **drives** the run and wants the full node/dict/error trace | **this runner** (Client API / ChatSDK) — synchronous, complete |
-| Watch runs the agent did **not** trigger, or ambient `Log.*` tails | **Keen's live log stream** — dev sandbox: `WS ws://<keen-host>:5540/monitor/stream/<space>/<agent>?token=<readToken>` (ms-monitor's published port; the read-token rides the `token` query, a bad one is refused with a plain 401 before the handshake). **Production has no external route for it yet** — the nginx edge does not proxy `/monitor/`, so a `wss://<host>/monitor/…` URL lands on the admin UI. |
+| Watch runs the agent did **not** trigger, or ambient `Log.*` tails | **Keen's live log stream** — `WSS wss://<host>/monitor/stream/<spaceId>/<agentSlug>?token=<readToken>` on the same host as the console (the read-token rides the `token` query; a bad one is refused with a plain 401 before the handshake). |
 
 ## Three things the environment must give you
 
 1. **An allow-listed `--origin`.** The relay's allow-list is the set of origins on the **webhook records bound to fully-bound api_keys** (key + client + certificate + contract + webhook; exact match; a missing `Origin` is refused — and a Node client sends none). An Origin not on it gets the upgrade refused (`Unexpected server response: 502` through the nginx edge). Pass `--origin <your partner site's origin>` — the origin on the webhook record bound to its api key. The token's `origin` claim must match it too.
-2. **A valid consumer `--token`.** Token is the only auth — there is no login step. The headless way: an MCP account creates an **MCP consumer** and calls `get_mcp_consumer_token` on the Keen MCP server → its `access_token` is `KEEN_TOKEN` and the consumer's `id` is `KEEN_USER_ID` (see `../keen-mcp-guide/README.md`). The manual way: copy the consumer `access_token` from the consumer app's browser cookies (open the app logged in as the consumer → DevTools → Application → Cookies) and set `KEEN_TOKEN`. An **absent** token → the runner prints both ways (MCP first) and exits `2`; a **wrong/expired** token → `run FAILED: Invalid token` (the Keen server, E3002).
+2. **A valid consumer `--token`.** Token is the only auth — there is no login step. The headless way: an MCP account creates an **MCP consumer** and calls `get_mcp_consumer_token` on the Keen MCP server → its `access_token` is `KEEN_TOKEN` and the consumer's `id` is `KEEN_USER_ID` (see `../keen-mcp-guide/README.md`). The manual way: copy the consumer `access_token` from the consumer app's browser cookies (open the app logged in as the consumer → DevTools → Application → Cookies) and set `KEEN_TOKEN`. An **absent** token → the runner prints both ways (MCP first) and exits `2`; a **wrong/expired** token → `run FAILED: Invalid token` (the Keen server, E3002). **The access token lives 10 minutes** (`expires_in: 600`): mint a fresh one before a run (`get_mcp_consumer_token`, or `refresh_mcp_consumer_token` with the refresh token) — the runner cannot refresh it, so a run that outlives it fails `Invalid token`.
 3. **`--user-id <consumerId>`.** The consumer token seals its `sub`/`email` inside `hash` (only the Keen server's cert secret opens it), so the runner cannot read them. The Keen server enforces `userContext.userId === token.sub`, so pass the consumer's id explicitly. **`--email` is presence-only** — the Keen server requires it non-empty but does not match it, so any value works (default: the token's `email` claim if present, else pass one).
 
 **Verified end-to-end:** a real consumer token + allow-listed origin + `--user-id` ran a full flow against `agent-one` — the runner streamed the live tokens ("Hello! How can I help you today?") and printed the whole flow-tree: `startNode → scriptNode(init.js) → agentNode(AgentOne, anthropic/claude-opus-4-5) → endNode(final)`, each node with its `request → response`. Exit 0.
 
-The SDK under `sdk/` is functionally identical to entanglement's ChatSDK (comment-only drift; `KeenChat` + `HOW_TO_USE` not included) — zero project imports, so it lifts out as-is at runtime. Its `App.Chat.*` ambient types live in entanglement's `src/@types/chat.d.ts`, which this package does not ship (`tsx` runs it untyped).
+The SDK under `sdk/` is the Keen 15.3 ChatSDK — reconnect / resume, the prompt limit (`getPromptLimit()`), `onSummarizing` (`KeenChat` + `HOW_TO_USE` not included) — with zero project imports, so it lifts out as-is at runtime. The public reference site (entanglement) `main` still ships the earlier SDK without those. Its `App.Chat.*` ambient types live in entanglement's `src/@types/chat.d.ts`, which this package does not ship (`tsx` runs it untyped).

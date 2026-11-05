@@ -382,6 +382,16 @@ Each run gets a fresh disposable sandbox with a hard cap of **~40 MB** (≈30 MB
 ~10 MB buffer for HTTP/agent reads). The node's cost is your code plus any `system/http` calls; keep heavy
 work and large returns in mind. The sandbox is torn down after each run.
 
+**Time limit — 15 minutes per run.** One run of a Script node may take at most **15 minutes** of wall-clock
+time, counted from the moment it starts (waiting in the queue is not counted). A run that reaches it is
+stopped and the sandbox is torn down; the flow answers the terminal **`E8101`** — *Script time limit
+reached!* — and does **not** take the Error edge (a retry would only run the same endless script again).
+The limit is per script run, never per flow, and a run you are debugging with the script debugger is
+exempt from it. Break long work into several Script nodes or shorter calls instead.
+
+**Agent-state writes.** Beside the per-entry caps, one run may write at most **8 MB** of agent state in
+total; a run over it writes nothing and takes the Error edge.
+
 ---
 
 *Next node: Agent / LLM (`agent-node.md`).*

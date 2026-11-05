@@ -1,6 +1,6 @@
 # Keen MCP server — how a building agent operates the platform
 
-The Keen **MCP server** is the door an AI agent uses to *configure* Keen without a human clicking through the admin console: spaces, agents and their settings, the API-access chain a partner/runner needs, caches + wake, and the agent's own end-user identities (MCP consumers). It exposes the org admin surface as **MCP tools** — 96 of them — over **Streamable HTTP**.
+The Keen **MCP server** is the door an AI agent uses to *configure* Keen without a human clicking through the admin console: spaces, agents and their settings, the API-access chain a partner/runner needs, caches + wake, and the agent's own end-user identities (MCP consumers). It exposes the org admin surface as **MCP tools** — 78 of them — over **Streamable HTTP**.
 
 > **For the AI reading this:** you PROVISION here, you do not chat here. Section 5 is the canonical 15-step recipe for setting an organization up for a bot — follow it in order and remember every value it marks. Build the space, the agent, the API chain and a consumer with these tools, then hand the result to the **agent-runner** (`../agent-runner/`) which runs and verifies the flow. Stay at the product level: never inspect servers, containers or infrastructure — everything you need is a tool call.
 
@@ -38,9 +38,9 @@ You act **as an MCP account**: a headless "agent helper" identity a human admin 
 
 **Log in** with the `mcp_login` tool: `{ id, secret }`. The org token stays inside your MCP session (it is never returned to you); every other tool then acts *as that account* — the platform re-checks its role on each call and the action log records the account, exactly like a human admin. The session refreshes its own token automatically; `logout` drops it.
 
-*(A server dedicated to one agent may carry `MCP_ACCOUNT_ID` / `MCP_ACCOUNT_SECRET` in its environment — then the first gated tool call logs in by itself and `mcp_login` is only needed to switch identity. On a shared server, always `mcp_login`.)*
+**Sessions.** `mcp_login` is the only way in (the server holds no identity of its own). One MCP session per MCP account: a newer `mcp_login` of the same account, from any client, takes the login over and the older session ends. A session expires after 30 minutes idle (2 minutes if it never logged in). An ended session answers HTTP 404 with the reason (`Session replaced…`, `Session expired…`) — start a new MCP session (your client reconnects) and `mcp_login` again.
 
-**Ask for the right role.** The role must carry the scopes for what you will do. A full build (below) needs write on: `spaces`, `agents`, `clients`, `certificates`, `webhooks`, `contracts`, `api_keys`, `cache`, `mcp_consumers` (and read on `consumer` if you look at human consumers). An `admin` role passes everything. Scopes are explained in `../keen-admin-guide/14-limits-and-scopes.md`.
+**Ask for the right role.** The role must carry the scopes for what you will do. A full build (below) needs write on: `spaces`, `agents`, `clients`, `certificates`, `webhooks`, `contracts`, `api_keys`, `cache`, `mcp_consumers` (and read on `consumer` if you look at human consumers). An MCP account is never `owner` or `admin`, so ask for a custom role that grants exactly these. `account`, `roles` and `mcp_accounts` cannot be granted to any role — accounts, roles and MCP accounts belong to the owner and the admins in the console. Scopes are explained in `../keen-admin-guide/14-limits-and-scopes.md`.
 
 ## 3. The rules of the road (what an MCP account can and cannot do)
 
@@ -50,17 +50,18 @@ You act **as an MCP account**: a headless "agent helper" identity a human admin 
 | API access chain — clients, certificates, webhooks, consumer contracts, api keys | full control (per your scopes), incl. rotate / wake / rebuild caches | — |
 | **MCP consumers** (your own end-user identities) | **everything** — create, assign contract + spaces, enable/disable, rotate secret, delete, **mint their token** (with its id + secret). This covers every MCP consumer in the organization, not only the ones you created: `createdBy` is a record, not an owner, so the consumers of a deleted MCP account can be taken over by another | — (only MCP accounts provision them; humans can also disable, rotate or delete — never create or assign) |
 | **Human consumers** (partner end users) | list / view | create, reset password, assign spaces/contract, delete |
-| **MCP accounts** (other agents) | list / view — to check one exists | create, change role/enabled, rotate, delete — **regardless of your role** |
-| Human accounts, roles | nothing | everything — those pages are closed to MCP accounts |
+| **MCP accounts** (other agents), human accounts, roles | nothing — there is no tool for them | everything, reads included — **regardless of your role**; ask the human admin |
 | Cache, logs | per your scopes | — |
 
 Every `delete_*`, `rotate_*` and `reset_space_deployment_token` is **destructive** (marked `destructiveHint`) — confirm with the human before calling. A tool that fails returns `isError` with the platform's status + message — read it and act, don't retry blindly:
 
-- **401** → no usable session token (the server already tried one refresh); `mcp_login` again.
+- **401** → no usable session token (the server already tried one refresh); `mcp_login` again. A change to your MCP account (its role, secret or Enabled switch) ends the login the same way.
+- **429** `Too many attempts!` → too many failed sign-ins (`mcp_login`, `get_mcp_consumer_token`); wait the `retryAfter` it names, then retry once.
 - **403** → a scope you lack, or a rule above (`MCP accounts may not access this resource`; `Only MCP accounts may manage MCP consumers` — raised on create / assign / token when the caller is a human, not on enable / rotate / delete, which a human with `mcp_consumers` write may also do).
 - **406** → a refused request: validation, a duplicate name, `rebuild_api_key_cache` on a half-wired key (the message names the four bindings), or — on the consumer-token tools — a uniform refusal that never says *which* check failed.
 - **400** → `wake_api_key` on a half-wired key — the message names what is missing (`no webhook / client / certificate / consumer contract bound`). **404** → an unknown id.
-- **503** → the org tier is not answering right now; wait and retry.
+- **503** → the org tier is not answering right now; wait and retry. On `initialize` (before any tool), 503 `Too many sessions!` means the server is at its session cap.
+- **HTTP 404** on the MCP endpoint itself (not a tool reply) → your MCP session ended (see section 2, *Sessions*).
 
 ## 4. The tools, by domain
 
@@ -70,18 +71,18 @@ Every `delete_*`, `rotate_*` and `reset_space_deployment_token` is **destructive
 | Spaces | spaces | `list_spaces`, `get_space` (carries the **deployment token**), `create_space`, `update_space`, `delete_space`, `reset_space_deployment_token`, `clear_spaces_cache` |
 | Agents | agents | `list_agents` (by space), `get_agent`, `create_agent`, `update_agent`, `delete_agent`, `get_agent_settings` / `update_agent_settings` (runtime JSON settings), `get_agent_front_settings` / `update_agent_front_settings` (partner-facing) |
 | Clients | clients | `list_clients`, `get_client`, `create_client` (secret shown once), `update_client`, `rotate_client`, `delete_client` |
-| Certificates | certificates | `list_certificates`, `get_certificate`, `create_certificate`, `update_certificate`, `rotate_certificate`, `delete_certificate` |
-| Webhooks | webhooks | `list_webhooks`, `get_webhook`, `create_webhook` (the partner/runner **origin** + webhook URL), `update_webhook`, `delete_webhook` |
+| Certificates | certificates | `list_certificates`, `get_certificate`, `create_certificate` (`secretKey` required — the reply is the only time it is shown), `update_certificate` (a new `secretKey` replaces the old; it can never be cleared), `rotate_certificate` (new key pair; the secret is unchanged), `delete_certificate` — no read, update or rotate reply ever shows the secret |
+| Webhooks | webhooks | `list_webhooks`, `get_webhook`, `create_webhook` (the partner/runner **origin** + an `https://` webhook URL), `update_webhook`, `delete_webhook` |
 | Consumer contracts | contracts | `list_consumer_contracts`, `get_consumer_contract`, `list_contract_spaces`, `create_consumer_contract`, `update_consumer_contract`, `delete_consumer_contract`, `update_consumer_contract_policy`, `assign_contract_spaces`, `assign_contract_default_system_spaces`, `assign_contract_default_outside_spaces` |
 | API keys | api_keys | `list_api_keys`, `get_api_key`, `create_api_key` (secret shown once), `update_api_key` (bind client / certificate / contract / webhook), `rotate_api_key`, `wake_api_key`, `delete_api_key` |
 | Cache | cache | `get_cache_status`, `create_cache` (whole resource), `invalidate_cache`, **`rebuild_api_key_cache`** (only what is bound to one key) |
 | Human consumers | consumer (read) | `list_consumers`, `get_consumer`, `get_consumer_info` |
 | MCP consumers | mcp_consumers | `list_mcp_consumers`, `get_mcp_consumer`, `create_mcp_consumer`, `assign_mcp_consumer_contract`, `assign_mcp_consumer_spaces`, `set_mcp_consumer_enabled`, `rotate_mcp_consumer_secret`, `delete_mcp_consumer`, **`get_mcp_consumer_token`**, `refresh_mcp_consumer_token` |
-| MCP accounts | mcp_accounts (read) | `list_mcp_accounts`, `get_mcp_account` |
-| Accounts / roles / own account | account, roles | `list_accounts`, `get_account`, `get_account_info`, `list_roles`, `get_role`, `get_own_account`, `update_own_profile`, `reset_own_password` … — **closed to MCP accounts** (403 `MCP accounts may not access this resource`); listed only so you recognise them. Your own identity is the MCP account you logged in with — there is nothing to read there. |
 | Logs | logs | `list_log_settings`, `update_log_setting`, `get_log_audit`, `get_log_file`, `list_log_records`, `reveal_log_token`, `create_log_record`, `update_log_record`, `delete_log_record` |
 
-Every tool prints its own description and input schema — read them; they name the exact scope and any once-only secret.
+There are no tools for accounts, roles or MCP accounts (yours included): those are the owner's and the admins' in the console. Your identity is the MCP account you logged in with.
+
+Every tool prints its own description and input schema — read them; they name the exact scope code (`sp1` = spaces read, `sp2` = spaces write, …) and any once-only secret.
 
 ## 5. The golden path — how an organization is set up for a bot (the canonical 15 steps)
 
@@ -97,7 +98,7 @@ Follow this order exactly. After every reply, **remember the values marked ⟶**
  2.2 The agent is created **under the space** from step 1 (`spaceId`) — that is the assignment.
  2.3 Optional — its two settings blobs: `update_agent_settings { id, jsonSettings }` (the runtime JSON Settings a flow's scripts read through `system/settings`) and `update_agent_front_settings { id, jsonSettings }` (the partner-facing Front Settings). `id` is the agent's record id from 2.1 (not the slug); `jsonSettings` is the WHOLE blob **serialized as a JSON string** (≤ 1,000,000 characters). Both are write-through: scripts see the new values on their next run — no redeploy. Read back with `get_agent_settings` / `get_agent_front_settings`.
 
-**3. Create the Client Certificate** — `create_certificate { name, secretKey }` ⟶ its **ID**. `secretKey` (16–32 characters) is optional, but pass one: it seals the private claims of every consumer token (consumer id, email, spaces, tenant key). Without it the certificate shows `Unset` and the seal falls back to a fixed, publicly known key — tokens still work, but anyone holding one can read those claims.
+**3. Create the Client Certificate** — `create_certificate { name, secretKey }` ⟶ its **ID**. `secretKey` is **required**: 16–32 characters (trimmed), not one repeated character. Generate a random one — `node -e "console.log(require('crypto').randomBytes(16).toString('hex'))"` (32 hex characters) — and never echo it. It seals the private claims of every consumer token and is the key Keen signs its webhooks with; the partner site receives it on wake (step 10.1). The reply is the **only** time it is shown — no list, get, update or rotate reply carries it — so ⟶ keep it in the project's secret store if you may need it again (lost → `update_certificate { id, secretKey }` sets a new one, then rebuild + wake).
 
 **4. Create the Client** — `create_client { name }` ⟶ its **ID** and its **Secret** (shown once).
 
@@ -105,7 +106,7 @@ Follow this order exactly. After every reply, **remember the values marked ⟶**
  5.1 Assign the space from step 1 to it — `assign_contract_spaces { id, spaceIds: [spaceId] }` — and set the **outside-consumer settings**: `update_consumer_contract_policy { id, outsideRegistration, otpInsideRegistration, otpOutsideRegistration, blockOutsideRegistrationLogins, blockSystemRegistrationLogins }` (all five booleans every call — a partial call is rejected) and `assign_contract_default_outside_spaces { id, spaceIds: [spaceId] }` (the spaces an outside consumer gets by default).
 
 **6. Start the entanglement project, find its port, tunnel it** — in the project path from step 0:
- 6.1 The site **refuses to boot** unless all seven `KEEN_*` values are non-empty (`KEEN_HOST`, `KEEN_ORIGIN`, `KEEN_CLIENT_ID`, `KEEN_CLIENT_SECRET`, `KEEN_API_KEY_ID`, `KEEN_API_KEY_SECRET`, `KEEN_WEBHOOK_SECRET` — it throws `Keen config missing from the environment` at startup) and `KEEN_WEBHOOK_SECRET` has at least 32 characters. Generate that secret once: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` (64 hex characters; `openssl rand -hex 32` works too). Keen does not sign its webhooks, so the site accepts a delivery only on `/api/keen-webhook/<KEEN_WEBHOOK_SECRET>` (step 7) — anything else gets 401. So before starting it: make sure `.env.local` exists (copy `.env.example` if not), put in the host block for the environment (section 1), the client id + secret from step 4, and **create the api key now** — `create_api_key { name }` ⟶ its **ID** + **Secret** (shown once) — and put those in too (its bindings come in step 8.1). For `KEEN_ORIGIN` use a placeholder for this first boot (e.g. `https://pending.local`); step 9 replaces it with the real ngrok URL and restarts.
+ 6.1 The site **refuses to boot** unless all seven `KEEN_*` values are non-empty (`KEEN_HOST`, `KEEN_ORIGIN`, `KEEN_CLIENT_ID`, `KEEN_CLIENT_SECRET`, `KEEN_API_KEY_ID`, `KEEN_API_KEY_SECRET`, `KEEN_WEBHOOK_SECRET` — it throws `Keen config missing from the environment` at startup) and `KEEN_WEBHOOK_SECRET` has at least 32 characters. Generate that secret once: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` (64 hex characters; `openssl rand -hex 32` works too). Keen signs every webhook delivery (`X-Keen-Signature`, an HMAC-SHA256 keyed from the certificate's secret, plus `X-Keen-Timestamp` and `X-Keen-Delivery`), but the reference site does not check that signature yet: it accepts a delivery only on `/api/keen-webhook/<KEEN_WEBHOOK_SECRET>` (step 7) — anything else gets 401 — so the secret URL stays. Before starting it: make sure `.env.local` exists (copy `.env.example` if not), put in the host block for the environment (section 1), the client id + secret from step 4, and **create the api key now** — `create_api_key { name }` ⟶ its **ID** + **Secret** (shown once) — and put those in too (its bindings come in step 8.1). For `KEEN_ORIGIN` use a placeholder for this first boot (e.g. `https://pending.local`); step 9 replaces it with the real ngrok URL and restarts.
  6.2 Start it with the command for the environment: LOCAL → `npm run dev-local` (Windows: `npm run dev-local:win`); SANDBOX → `npm run dev` (Windows: `npm run dev:win`).
  6.3 **Read the port from its output** (`Local: http://localhost:<port>` — Next takes 3000, or the next free port if 3000 is busy). Do not assume 3000.
  6.4 Tunnel **that** port — `ngrok http <port>` — and take the public URL it prints (`https://<xxxx>.ngrok-free.app`). ⟶ remember it as `<ngrok>`. (If you cannot run processes yourself, give the human these exact commands and ask for the port and the URL.)
@@ -113,7 +114,7 @@ Follow this order exactly. After every reply, **remember the values marked ⟶**
 **7. Create the Webhook** — `create_webhook { name, origin, webhook }` with
  - `name`    = a label (unique, up to 100 characters)
  - `origin`  = `<ngrok>` (the exact `scheme://host` — this is what the partner site / runner will present; anything else is silently dropped)
- - `webhook` = `<ngrok>/api/keen-webhook/<KEEN_WEBHOOK_SECRET>` (the secret from 6.1 — this URL is itself a secret: never echo it, and mask it when a tool reply repeats it)
+ - `webhook` = `<ngrok>/api/keen-webhook/<KEEN_WEBHOOK_SECRET>` (the secret from 6.1 — this URL is itself a secret: never echo it, and mask it when a tool reply repeats it). It must be an `https://` URL (`create_webhook` refuses `http://`), and Keen delivers only to a public address and never follows a redirect — the ngrok URL qualifies.
  ⟶ the **webhook ID**.
  Where the allow-list lives: there is no origin on the api key itself. The platform lets in exactly the `origin`s of the webhook records bound to **fully-bound** api keys (all four bindings), read from the served `api_keys` cache — so this origin is accepted only once step 8.1 binds the record, and a later `update_webhook` reaches the allow-list only through `rebuild_api_key_cache`.
 
@@ -144,12 +145,12 @@ KEEN_WEBHOOK_SECRET=<the secret from 6.1, ≥ 32 chars — the same value as in 
  Then **restart** it (stop the process from step 6.2 and start it again with the same command) — the Keen connector reads its configuration when it is constructed, so a running site never picks up new `.env.local` values without a restart. Keep the ngrok tunnel running; the site behind it is unchanged.
 
 **10. Rebuild the api key's cache resources** — `rebuild_api_key_cache { id }` (rebuilds ONLY what is bound to this key: the key, its certificate, client, contract + policy, the contract's spaces and their agents).
- 10.1 **Wake** the api key — `wake_api_key { id }` — **only once every resource above exists and is bound** (client, certificate, contract, webhook; a half-wired key answers 400 naming what is missing). The partner site (the restarted entanglement from step 9) is handed the certificate and told to re-read the fresh caches. One rebuild + one wake is the whole refresh; **repeat this pair after every later change** to anything bound to the key.
+ 10.1 **Wake** the api key — `wake_api_key { id }` — **only once every resource above exists and is bound** (client, certificate, contract, webhook; a half-wired key answers 400 naming what is missing). The partner site (the restarted entanglement from step 9) is handed the certificate (its public PEM + the secret from step 3) and told to re-read the fresh caches. One rebuild + one wake is the whole refresh; **repeat this pair after every later change** to anything bound to the key.
 
 **11. Create the MCP Consumer** — `create_mcp_consumer { name, consumerContractId, space: [spaceId], enabled: true }`
  ⟶ the reply shows `{ consumer, secret }` (the worker wraps it as `result`, the MCP server unwraps it): keep `consumer.id` and `secret` (shown **once**). `name` is unique and immutable; `space` must be within the contract's spaces.
 
-**12. Take its token** — `get_mcp_consumer_token { id, secret }` ⟶ `access_token`, `refresh_token`, `expires_in`. This is the consumer's working credential; it is issued only here.
+**12. Take its token** — `get_mcp_consumer_token { id, secret }` ⟶ `access_token`, `refresh_token`, `expires_in`. This is the consumer's working credential; it is issued only here. The access token is short-lived (`expires_in` — 600 s, 10 minutes, on a standard install); the refresh token lasts days. Keep both.
 
 **13. Use the agent-runner with that token** — the runner carries exactly **two credentials**: the consumer `access_token` (the only auth on the chat WebSocket — sent as `userContext.accessToken` on every frame) and the space's **Deployment Token** (only for `keen-deploy`). It never uses the client secret or the api-key secret — those belong to the entanglement site (step 9) alone. Fill `../agent-runner/.env`:
 
@@ -157,7 +158,7 @@ KEEN_WEBHOOK_SECRET=<the secret from 6.1, ≥ 32 chars — the same value as in 
 |---|---|
 | `KEEN_HOST` | from step 0: `localhost` (LOCAL — and export `NODE_TLS_REJECT_UNAUTHORIZED=0` for `run.ts`) or the bare sandbox host |
 | `KEEN_TLS_INSECURE` | LOCAL only: `true` — `keen-deploy` is a Go binary and needs its own self-signed switch (`NODE_TLS_REJECT_UNAUTHORIZED` does not reach it) |
-| `KEEN_TOKEN` | the `access_token` from step 12 |
+| `KEEN_TOKEN` | the `access_token` from step 12 (it lives 10 minutes — see *When the consumer token expires* below) |
 | `KEEN_USER_ID` | the MCP consumer's `id` from step 11 |
 | `KEEN_EMAIL` | any non-empty value (an MCP consumer has no email; presence-checked only) |
 | `KEEN_ORIGIN` | the `origin` from step 7 — exact match |
@@ -177,11 +178,11 @@ KEEN_WEBHOOK_SECRET=<the secret from 6.1, ≥ 32 chars — the same value as in 
 
  Then `rebuild_api_key_cache` → `wake_api_key` — the rebuild is what puts the new origin on the allow-list (`update_webhook` alone never reaches it). Skipping any one = silent drops or `Invalid token`.
 
-**When the consumer token expires** (`expires_in`): the runner cannot refresh it itself — by design an MCP consumer's token moves only through this server. Call `refresh_mcp_consumer_token { refresh_token }` (or `get_mcp_consumer_token` again with the stored id + secret) and update `KEEN_TOKEN`. A disabled, deleted or contract-less consumer is refused (406) — fix the consumer, not the token.
+**When the consumer token expires** (`expires_in` — 10 minutes, so before almost every test session): the runner cannot refresh it itself — by design an MCP consumer's token moves only through this server. Call `refresh_mcp_consumer_token { refresh_token }` — it answers a NEW pair and spends the old refresh token, so replace both stored values — or `get_mcp_consumer_token` again with the stored id + secret, and update `KEEN_TOKEN`. A disabled, deleted, re-keyed or re-homed consumer is refused (406) — fix the consumer, then mint with `get_mcp_consumer_token`.
 
 ## 6. Secrets discipline
 
-Shown **once**, never retrievable again: the MCP account secret (the admin's), the client secret, the api-key secret, the MCP consumer secret, the space deployment token (re-mintable). Store them in the runner's `.env` or a secret store the moment you receive them; never echo them into chat, logs or files that get committed. Lost one → `rotate_*` / `reset_space_deployment_token` mints a new one and the old one stops working at once for anything **new**: no new sign-in, token or deploy connection accepts it. What was already issued keeps running — application tokens survive `rotate_api_key`, an MCP consumer's current token pair keeps refreshing after `rotate_mcp_consumer_secret`, and a deploy session already open finishes its short window. A **leaked** secret therefore needs more than a rotate: `delete_api_key` (or unbind its certificate / contract) for a partner key, `set_mcp_consumer_enabled false` or `delete_mcp_consumer` for a consumer — and even those leave an access token already issued valid until it expires (a consumer's lives up to 7 days on today's sandboxes).
+Shown **once**, never retrievable again: the MCP account secret (the admin's), the client secret, the api-key secret, the certificate secret (you chose it; only `create_certificate`'s reply repeats it), the MCP consumer secret. The space deployment token is readable again with `get_space` (re-mintable). Store them in the runner's `.env` or a secret store the moment you receive them; never echo them into chat, logs or files that get committed. Lost one → `rotate_*` / `reset_space_deployment_token` mints a new one and the old one stops working at once for anything **new**: no new sign-in, token or deploy connection accepts it. What was already issued: application tokens survive `rotate_api_key`, and a deploy session already open finishes its short window. An MCP consumer is different — `rotate_mcp_consumer_secret`, `set_mcp_consumer_enabled false`, `delete_mcp_consumer`, a contract change or narrowed spaces revoke every token pair issued for it **at once** (re-enabling does not revive them; mint a new pair). A **leaked** partner key needs more than a rotate: `delete_api_key` (or unbind its certificate / contract).
 
 ## 7. Watch out for
 

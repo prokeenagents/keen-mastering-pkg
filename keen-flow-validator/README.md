@@ -49,6 +49,16 @@ Two kinds of rule are enforced, and it matters which is which:
 - `src/scripts` missing → warning only (the deploy creates it); `src/keen-tools.json` missing → warning.
 - A `src/scripts/debux.js` is warned and skipped — the deploy injects the engine's own copy over it.
 
+**`.vscode/keen.json` — a local secrets file** (warnings only; a value is never printed)
+- It holds the deployment token and the console login (`user` + `password`) the VS Code debuggers and
+  `agent-runner/debug.ts` sign in with, so it must be **git-ignored**: inside a git work tree the check is
+  `git -C <root> check-ignore -q .vscode/keen.json`; outside one (or without git) the root `.gitignore` must
+  carry a matching pattern (`.vscode/keen.json`, `.vscode/`, `keen.json` …). Otherwise: *"holds the deployment
+  token and your password — add it to .gitignore; never commit it"*. The deploy never uploads it (dot-entries
+  are skipped).
+- When it carries `user` or `password`: `user` must look like an e-mail and `password` must be non-empty.
+  Invalid JSON / a non-object is warned too.
+
 **Structure & node shape**
 - `.flow` is `{ nodes, edges }` (flags stray top-level keys).
 - Node `id` = `<type>_<12 A–Za–z0–9>`; `type` valid and agrees with the id prefix.
@@ -61,6 +71,18 @@ Two kinds of rule are enforced, and it matters which is which:
   multi-in elsewhere; `wait` accepts **only** Flow Pointer sources.
 - **Required out-handles wired** — a node whose out dead-ends is warned (e.g. condition `true`+`false`,
   loop `out`+`next_1`, agent/script `next_1`).
+- **Summary output / Summarizer node** — the Summarizer is a flow step with three handles: `in`
+  (a merge handle), `error` (Fallback) and `next_1` (Out). An Agent node's `summary` edges must point to exactly ONE
+  `summarizerNode`, else `Summary output must connect to exactly one Summarizer node.` (an agentNode target is
+  refused); no `summary` edge = unused = fine; several LLM nodes may share one Summarizer. A Summarizer reached by a
+  Summary output or a Summarizer's Fallback needs `settings.llm` company + model (`A Summarizer node needs a model.`).
+  Its `in` takes only an Agent's `summary` or a Summarizer's `error` (`A Summarizer node's In takes only a Summary
+  output or a Summarizer's Fallback.`); its `error` has exactly one edge, to a Summarizer (`A Summarizer node's
+  Fallback connects only to a Summarizer node.`); Fallbacks must not loop (`Summarizer Fallbacks must not form a
+  loop.`). Its Out is checked like any wiring but NOT against the LLM node's Out. Warnings: a
+  reasoning summarizer (o1 / o4-mini, or an effort other than none / low — reasoning tokens count toward the
+  1500-token summary cap), a source node with `skip-internal-database-interactions` (no history, so it never
+  summarizes), a Summarizer no Summary output reaches. A Summarizer needs no agentId / agentName.
 - **Recommended failure edges** — an unwired **Error** (Script) or **Fallback** (agent/LLM) edge is warned,
   with the real consequence per engine: a script throw with no `error` edge **stalls** the flow; an agent
   provider failure with no Fallback **continues on `next_1` with the error text as the answer**.

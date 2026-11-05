@@ -83,7 +83,7 @@ that's exactly who this is for.
 
 ## The node catalog (`nodes/`)
 
-All 14 node types, one page each:
+All 15 node types, one page each:
 
 | Node | File | | Node | File |
 |---|---|---|---|---|
@@ -94,6 +94,7 @@ All 14 node types, one page each:
 | Run Flow | `nodes/run-flow-node.md` | | Flow Pointer | `nodes/flow-pointer-node.md` |
 | Jump Flow | `nodes/jump-flow-node.md` | | Parallel Context | `nodes/parallel-context-node.md` |
 | Join Flow | `nodes/join-flow-node.md` | | Note | `nodes/note-node.md` |
+| Summarizer | `nodes/summarizer-node.md` | | | |
 
 ## Golden path (build your first flow)
 

@@ -17,6 +17,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 const { SPEC, WAIT_ONLY_FROM, RECOMMEND_OUT_MSG, LLM_PROVIDERS, RULES, typeFromId } = require('./node-spec');
 const { lintScript } = require('./script-lint');
 
@@ -99,7 +100,85 @@ function loadProject(root) {
     } else {
         warn('keen-tools.json', '', 'missing src/keen-tools.json (fine if the project declares no tools)');
     }
+    checkKeenJson(root);
     return { root, flowsDir, scriptsDir, flowFiles, scripts, allFiles, tools: asMap(tools), toolsPresent };
+}
+
+// ─── .vscode/keen.json — a local secrets file ───────────────────────────────
+// It holds the deployment token and the console login (user + password) the VS Code
+// debuggers and agent-runner/debug.ts sign in with, so it must never be committed.
+// The deploy never uploads it (dot-entries are skipped). Values are never printed.
+const KEEN_JSON = '.vscode/keen.json';
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function checkKeenJson(root) {
+    const file = path.join(root, '.vscode', 'keen.json');
+    if (!fs.existsSync(file)) return;
+    if (!keenJsonIgnored(root)) warn('project', KEEN_JSON, 'holds the deployment token and your password — add it to .gitignore; never commit it');
+
+    let cfg;
+    try { cfg = asMap(JSON.parse(fs.readFileSync(file, 'utf8'))); }
+    catch { warn('project', KEEN_JSON, 'is not valid JSON — the VS Code extension and agent-runner/debug.ts cannot read it'); return; }
+    if (!cfg) { warn('project', KEEN_JSON, 'must be a JSON object { server, space, token, user, password }'); return; }
+    if (!('user' in cfg) && !('password' in cfg)) return; // no debug login configured — nothing to check
+    if (!EMAIL_RE.test(str(cfg.user).trim())) warn('project', KEEN_JSON, '`user` must be your console account e-mail — the debuggers sign in with it (the value is not shown)');
+    if (str(cfg.password) === '') warn('project', KEEN_JSON, '`password` is empty — the debuggers sign in with your console account password');
+}
+
+/**
+ * Whether .vscode/keen.json is git-ignored: `git check-ignore` inside a work tree (exit 0 =
+ * ignored, 1 = not); outside one (or without git) the root .gitignore is matched instead.
+ */
+function keenJsonIgnored(root) {
+    const r = spawnSync('git', ['-C', root, 'check-ignore', '-q', KEEN_JSON], { stdio: 'ignore' });
+    if (r.status === 0) return true;
+    if (r.status === 1) return false;
+    let text;
+    try { text = fs.readFileSync(path.join(root, '.gitignore'), 'utf8'); }
+    catch { return false; }
+    return gitignoreMatches(text, KEEN_JSON);
+}
+
+/** A gitignore pattern as an RE2-safe regex source (the Go port builds the same one). */
+function globSource(pat) {
+    let out = '';
+    for (let i = 0; i < pat.length; i++) {
+        const c = pat[i];
+        if (c === '*' && pat[i + 1] === '*') {
+            if (pat[i + 2] === '/') { out += '(?:.*/)?'; i += 2; }
+            else { out += '.*'; i += 1; }
+        } else if (c === '*') out += '[^/]*';
+        else if (c === '?') out += '[^/]';
+        else out += /[\\^$.|+()[\]{}]/.test(c) ? '\\' + c : c;
+    }
+    return out;
+}
+
+/**
+ * The root .gitignore's verdict on `rel` — the last matching pattern wins (`!` re-includes).
+ * A pattern matches the path or one of its parent directories; a trailing `/` matches a
+ * directory only; a pattern with a `/` (other than trailing) is anchored at the root,
+ * one without matches the base name at any depth.
+ */
+function gitignoreMatches(text, rel) {
+    const parts = rel.split('/');
+    const candidates = parts.map((_, i) => ({ path: parts.slice(0, i + 1).join('/'), dir: i < parts.length - 1 }));
+    let ignored = false;
+    for (const raw of text.split(/\r?\n/)) {
+        let pat = raw.trim();
+        if (pat === '' || pat.startsWith('#')) continue;
+        let negate = false;
+        if (pat.startsWith('!')) { negate = true; pat = pat.slice(1); }
+        let dirOnly = false;
+        if (pat.endsWith('/')) { dirOnly = true; pat = pat.replace(/\/+$/, ''); }
+        const anchored = pat.includes('/');
+        pat = pat.replace(/^\/+/, '');
+        if (pat === '') continue;
+        const re = new RegExp('^' + globSource(pat) + '$');
+        const hit = candidates.some(c => (!dirOnly || c.dir) && re.test(anchored ? c.path : c.path.split('/').pop()));
+        if (hit) ignored = !negate;
+    }
+    return ignored;
 }
 
 // ─── flow parsing ──────────────────────────────────────────────────────────
@@ -259,6 +338,19 @@ function checkNodeFields(file, id, type, s, data) {
             }
             break;
         }
+        case 'summarizerNode': {
+            // Model presence is checked in checkEdgesAndWiring (it depends on a Summary output reaching the node).
+            const llm = asMap(s.llm);
+            const company = llm ? str(llm.company) : '';
+            if (company && !LLM_PROVIDERS.includes(company.trim().toLowerCase())) err(file, id, `settings.llm.company "${company}" is not a supported provider (${LLM_PROVIDERS.join(', ')}) — the LLM engine throws E6101 "Unsupported LLM provider"`);
+            if (Array.isArray(s.prompts)) {
+                for (const pv of s.prompts) {
+                    const pm = asMap(pv);
+                    if (pm && typeof pm.content === 'string') checkPlaceholders(file, id, pm.content);
+                }
+            }
+            break;
+        }
         case 'noteNode': {
             const label = firstStr(data.label, s.value);
             if (label && label.length > RULES.noteMax) warn(file, id, `Note text exceeds ${RULES.noteMax} chars`);
@@ -306,6 +398,34 @@ function typeOf(nv) {
     const t = str(n.type);
     if (t && SPEC[t]) return t;
     return typeFromId(str(n.id)) || '';
+}
+
+/** The exact words ms-deploy refuses a deploy with when a Summary output is wired wrongly. */
+const SUMMARY_OUTPUT_MESSAGE = 'Summary output must connect to exactly one Summarizer node.';
+const SUMMARIZER_MODEL_MESSAGE = 'A Summarizer node needs a model.';
+const SUMMARIZER_IN_MESSAGE = "A Summarizer node's In takes only a Summary output or a Summarizer's Fallback.";
+const SUMMARIZER_FALLBACK_MESSAGE = "A Summarizer node's Fallback connects only to a Summarizer node.";
+const SUMMARIZER_LOOP_MESSAGE = 'Summarizer Fallbacks must not form a loop.';
+
+function hasSkipDatabaseRule(n) {
+    const rules = asMap(n.data) && asMap(n.data.settings) && asMap(n.data.settings).specialRules;
+    return Array.isArray(rules) && rules.some(r => asMap(r) && str(asMap(r).type) === 'skip-internal-database-interactions');
+}
+
+/** A summarizer on a reasoning model (o1 / o4-mini) or with a reasoning effort other than none / low. */
+function isReasoningSummarizer(n) {
+    const set = asMap(n && n.data) && asMap(n.data.settings);
+    const llm = set && asMap(set.llm);
+    if (!llm) return false;
+    if (['o1', 'o4-mini'].includes(str(llm.model))) return true;
+    const p = asMap(llm.parameters) || {};
+    for (const k of ['effort', 'reasoningEffort', 'thinkingLevel']) {
+        const v = p[k];
+        if (v === undefined || v === null || v === '') continue;
+        if (typeof v === 'number') { if (v >= 1) return true; continue; }
+        if (!['none', 'low', 'minimal'].includes(str(v).toLowerCase())) return true;
+    }
+    return false;
 }
 
 function checkEdgesAndWiring(file, doc) {
@@ -375,6 +495,61 @@ function checkEdgesAndWiring(file, doc) {
         }
     }
 
+    // Summary output (the Summarizer node is a flow step): a used `summary` handle must reach exactly ONE
+    // summarizerNode (no edge = unused = fine); several LLM nodes may share one. The words are ms-deploy's.
+    const edgeList = (Array.isArray(doc.edges) ? doc.edges : []).map(asMap).filter(Boolean);
+    const reachedBy = new Set(); // summarizerNode ids reached by a Summary output or a Summarizer's Fallback
+    for (const nv of nodes) {
+        const n = asMap(nv);
+        const id = n ? str(n.id) : '';
+        if (!id || typeOf(n) !== 'agentNode') continue;
+        const targets = (outByHandle.get(id) || {}).summary || [];
+        if (targets.length === 0) continue;
+        if (targets.length !== 1 || typeOf(byId.get(targets[0])) !== 'summarizerNode') {
+            err(file, id, SUMMARY_OUTPUT_MESSAGE);
+            continue;
+        }
+        reachedBy.add(targets[0]);
+        if (hasSkipDatabaseRule(n)) warn(file, id, 'agentNode has a Summary output but "Interact with DB" is off (skip-internal-database-interactions) — it keeps no history, so it never summarizes');
+    }
+    const summarizerIds = nodes.map(asMap).filter(n => n && typeOf(n) === 'summarizerNode' && str(n.id)).map(n => str(n.id));
+    // Fallback edges: exactly one, to a summarizerNode (as any source handle). Reached Summarizers include Fallback targets.
+    const fallbackOf = new Map(); // summarizerNode id → its Fallback target (when valid)
+    for (const id of summarizerIds) {
+        const targets = (outByHandle.get(id) || {}).error || [];
+        if (targets.length === 0) continue;
+        if (targets.length !== 1 || typeOf(byId.get(targets[0])) !== 'summarizerNode') { err(file, id, SUMMARIZER_FALLBACK_MESSAGE); continue; }
+        fallbackOf.set(id, targets[0]);
+    }
+    // Fallbacks between Summarizers must not loop (reported once per node on a loop).
+    const onLoop = new Set();
+    for (const id of summarizerIds) {
+        const seen = new Set([id]);
+        for (let cur = fallbackOf.get(id); cur; cur = fallbackOf.get(cur)) {
+            if (cur === id) { onLoop.add(id); break; }
+            if (seen.has(cur)) break;
+            seen.add(cur);
+        }
+    }
+    for (const id of summarizerIds) if (onLoop.has(id)) err(file, id, SUMMARIZER_LOOP_MESSAGE);
+    // A Summarizer reached by a Summary output or by another Summarizer's Fallback must carry a model.
+    for (const nv of nodes) {
+        const n = asMap(nv);
+        const id = n ? str(n.id) : '';
+        if (!id || typeOf(n) !== 'summarizerNode') continue;
+        // In takes only an agentNode's `summary` or a summarizerNode's `error` (once per node).
+        const badIn = edgeList.some(e => str(e.target) === id &&
+            !((str(e.sourceHandle) === 'summary' && typeOf(byId.get(str(e.source))) === 'agentNode') ||
+              (str(e.sourceHandle) === 'error' && typeOf(byId.get(str(e.source))) === 'summarizerNode')));
+        if (badIn) err(file, id, SUMMARIZER_IN_MESSAGE);
+        const intoFromFallback = edgeList.some(e => str(e.target) === id && str(e.sourceHandle) === 'error' && typeOf(byId.get(str(e.source))) === 'summarizerNode');
+        if (!reachedBy.has(id) && !intoFromFallback) { warn(file, id, 'Summarizer node is not connected to any Summary output'); continue; }
+        const set = asMap(asMap(n.data) && asMap(n.data).settings) || {};
+        const llm = asMap(set.llm);
+        if (!llm || !str(llm.company).trim() || !str(llm.model).trim()) { err(file, id, SUMMARIZER_MODEL_MESSAGE); continue; }
+        if (isReasoningSummarizer(n)) warn(file, id, 'the summarizer uses a reasoning model / effort — reasoning tokens count toward the 1500-token summary cap and a cut summary is discarded; use a fast non-reasoning model (effort none / low)');
+    }
+
     // reachability from any start node
     const reach = new Set();
     for (const nv of nodes) if (typeOf(nv) === 'startNode') { const id = str(asMap(nv).id); if (id) reach.add(id); }
@@ -390,7 +565,7 @@ function checkEdgesAndWiring(file, doc) {
         const n = asMap(nv);
         const id = n ? str(n.id) : '';
         const t = typeOf(n);
-        if (!id || t === 'startNode' || t === 'noteNode' || t === 'parallelFlowNode') continue;
+        if (!id || t === 'startNode' || t === 'noteNode' || t === 'parallelFlowNode' || t === 'summarizerNode') continue;
         if (!reach.has(id)) warn(file, id, `${t} is not reachable from any Start node`);
     }
 }

@@ -42,7 +42,7 @@ Golden path). Then hand the partner exactly three things:
 | `KEEN_ORIGIN` | `<ngrok URL>` — exactly the Origin on the Webhook (a placeholder such as `https://pending.local` for the very first boot) |
 | `KEEN_CLIENT_ID` / `KEEN_CLIENT_SECRET` | the Client's id + secret |
 | `KEEN_API_KEY_ID` / `KEEN_API_KEY_SECRET` | the Api Key's id + secret |
-| `KEEN_WEBHOOK_SECRET` | a secret you generate (`openssl rand -hex 32`, at least 32 characters). It is the last segment of the Webhook URL — Keen does not sign its webhooks, so the site accepts a delivery only on `/api/keen-webhook/<this value>` and answers 401 to anything else. Rotate it here AND on the Webhook if it ever leaks. |
+| `KEEN_WEBHOOK_SECRET` | a secret you generate (`openssl rand -hex 32`, at least 32 characters). It is the last segment of the Webhook URL — Keen signs every delivery, but the reference site today does not check that signature: it accepts a delivery only on `/api/keen-webhook/<this value>` and answers 401 to anything else. Rotate it here AND on the Webhook if it ever leaks. |
 
 The site **refuses to boot** unless the seven values other than `KEEN_WS` are all filled (always set
 `KEEN_WS` too — without it the chat never connects), and it reads them **only when it starts** —
@@ -64,10 +64,11 @@ Finally, on the key's page: **Rebuild Resource Cache** (the api-key cascade, `07
    never in the browser. The browser only ever holds an access token minted for one end user.
 2. **Get an application token.** The server exchanges its client credentials for an **application
    token** — the standing credential it presents on each end user's behalf. It stays on the server.
-   It has **no expiry and no refresh**: it keeps working until the admin **deletes** the key,
-   unbinds any of its four bindings, or binds it to a different client (a different certificate or
-   contract, or a new contract key, also refuses it for partner sign-ups) — then the server simply
-   requests a new one (the reference site requests it at start-up and retries until it succeeds).
+   It lives **365 days** and has **no refresh**: it keeps working until it expires or the admin
+   **deletes** the key, unbinds any of its four bindings, or binds it to a different client (a
+   different certificate or contract, or a new contract key, also refuses it for partner sign-ups) —
+   then the server simply requests a new one (the reference site requests it at start-up and retries
+   until it succeeds).
 3. **Complete the certificate handshake.** The server asks for a one-time **code**, then **claims** it.
    On a valid claim, KeenAgents delivers the **certificate material** (the public key the site uses to
    verify KeenAgents-issued tokens, plus the shared secret) to the registered **notification URL**.
@@ -91,7 +92,11 @@ Finally, on the key's page: **Rebuild Resource Cache** (the api-key cascade, `07
    changes — or an admin presses **Wake** — KeenAgents POSTs a small notice there, and the site
    **re-fetches** the affected resources over its authenticated connection. The notice carries **no
    data** — it's only a nudge to re-read. The one exception is the certificate delivery from step 3
-   (also re-sent by **Wake**): that POST does carry the certificate material itself.
+   (also re-sent by **Wake**): that POST does carry the certificate material itself. Every POST is
+   **signed** — the headers `X-Keen-Delivery` (a new id each time), `X-Keen-Timestamp` and
+   `X-Keen-Signature` (an HMAC-SHA256 over `<timestamp>.<raw body>`, under a key derived from the
+   certificate's secret key); the public docs' *Verifying Webhooks* page shows how to check one. The
+   reference site today does not check it — it relies on the secret in its webhook path.
 
 ## The requests, in shape
 
@@ -102,7 +107,7 @@ see in engineering material). Every call carries the partner's browser **Origin*
 exactly.
 
 ```
-1 · Application token (server-side, once; no expiry, no refresh — re-request if it stops working)
+1 · Application token (server-side; lives 365 days, no refresh — re-request when it stops working)
 POST /keen-api/auth/application_token?client_id=<kcid_…>
      Origin: https://your-site.example
      Authorization: <base64 of "client_secret|api_key_id|api_key_secret">   // bare base64 — no "Bearer", no "Basic"
@@ -176,5 +181,6 @@ re-read.
   4. every **consumer token** issued under the old URL — the origin is written into each token:
      people simply sign in again; an MCP consumer's token is re-minted through the Keen MCP server.
 
-  Then on the key: **Rebuild Resource Cache** (a Webhook edit reaches the allow-list only through a
-  Rebuild) and **Wake**. Miss one and the calls are silently dropped or the tokens are refused.
+  Then on the key: **Rebuild Resource Cache** (the always-safe routine — saving the Webhook already
+  refreshed the allow-list) and **Wake**. Miss one of the four and the calls are silently dropped or
+  the tokens are refused.

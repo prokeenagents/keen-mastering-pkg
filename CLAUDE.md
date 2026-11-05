@@ -13,7 +13,7 @@ Claude Code loads this file at launch but says nothing until the person writes. 
 ## Before anything else
 - Ask **which Keen** you are working on — just "what is the sandbox URL?". Derive the environment yourself, silently: `localhost` ⇒ LOCAL, a real URL ⇒ a real sandbox. Everything (URLs, TLS, start commands) follows from it; the person is never asked to choose a mode.
 - Ask **where the entanglement project** is on disk (the partner site you run + tunnel).
-- Secrets (MCP account secret, client / api-key secrets, consumer secrets, deployment tokens) are shown once; keep them in `.env` files or a secret store — never in chat logs or committed files.
+- Secrets (MCP account secret, client / api-key secrets, the certificate secret, consumer secrets and tokens, deployment tokens) — most are shown only once; keep them in `.env` files or a secret store — never in chat logs or committed files.
 
 ## The slash commands (in this order: install once, then start every time)
 - `/keen-start` — the entry point: WELCOME banner, then List existing projects (reload one from `working_dir/`), Create new project (the wizard + the whole 15-step setup, saved to `working_dir/<spaceId>/`), or Just connect (log in as an MCP account for ad-hoc work, nothing saved).
@@ -25,4 +25,4 @@ Claude Code loads this file at launch but says nothing until the person writes. 
 @keen-mcp-guide/README.md
 @README.md
 
-Deeper references, read on demand: `keen-admin-guide/` (what every console screen does, in plain words — start at `keen-admin-guide/README.md`), `agent-runner/README.md` + `agent-runner/docs/` (the run/deploy loop), `keen-flow-validator/README.md` (the validator's rules), `shira-flow-builder-guide/README.md` (how flows and nodes work — the authoring reference), `entanglement-guide/README.md` (the partner site's internals).
+Deeper references, read on demand: `keen-admin-guide/` (what every console screen does, in plain words — start at `keen-admin-guide/README.md`), `agent-runner/README.md` + `agent-runner/docs/` (the run/deploy loop; `DEBUG.md` for a manual debugger attach with `debug.ts`), `keen-flow-validator/README.md` (the validator's rules), `shira-flow-builder-guide/README.md` (how flows and nodes work — the authoring reference), `entanglement-guide/README.md` (the partner site's internals).

@@ -35,15 +35,32 @@ export const CHAT_SETTINGS = {
     RESPONSE_TIMEOUT_MS: 600_000,
 
     /**
-     * Backoff between retries — both SendRequest's transport retries (socket not
-     * ready) and TaskQueue's per-node response retries (transient engine error).
+     * Fixed pause between retries of the RUN FRAME (the first prompt; 10 × 1 s
+     * decides whether the flow starts) and between SendRequest's transport
+     * retries (socket not ready).
      */
     RETRY_DELAY_MS: 1_000,
 
     /**
+     * Every NODE's response retries — the root flow's
+     * startNode and every `initial: true` node included, since a node belongs to
+     * a flow that has already started: exponential
+     * backoff with FULL jitter — the pause after the n-th failure in a row is
+     * random in [0, min(RETRY_MAX_DELAY_MS, RETRY_BASE_DELAY_MS × 2^(n−1))],
+     * i.e. caps of 1 → 2 → 4 → 8 → 10 s. It resets when the node succeeds
+     * (every node starts from the base). A `retryAfterMs` hint on a refusal
+     * (E4xxx) is honoured instead, capped at RETRY_MAX_DELAY_MS. The attempt
+     * count stays infinite — a started flow is always finished.
+     */
+    RETRY_BASE_DELAY_MS: 1_000,
+    RETRY_MAX_DELAY_MS: 10_000,
+
+    /**
      * Heartbeat cadence while a run is in flight. Fires a 'ping' that refreshes the
-     * engine's dict/session TTL (60s) → 12x margin, so a live flow survives a brief
-     * drop while abandoned state still reclaims within ~a minute.
+     * engine's dict/session TTL (60s) → 12x margin. A protocol-2 relay answers it
+     * with a `pong`, which feeds the liveness check (LIVENESS_MS). While the
+     * socket is away, the relay keeps the engine TTLs alive itself for its grace
+     * (120 s by default).
      */
     HEARTBEAT_INTERVAL_MS: 5_000,
 
@@ -55,9 +72,11 @@ export const CHAT_SETTINGS = {
     CONTEXT_BATCH_SIZE: 15,
 
     /**
-     * Bounded retry count for INITIAL-run frames (a failed start means the user's
-     * request never began). Continuations retry infinitely instead — the flow is
-     * already alive server-side, so we keep trying until the socket recovers.
+     * Bounded attempts for the RUN FRAME (the user's first prompt) — its transport
+     * retries and its capacity refusals (E4xxx), 1 s apart. The run frame is the
+     * only thing that may be refused: after the 10th refusal the
+     * run settles with the refusal ("busy, try again in a minute"). Every node
+     * after it retries infinitely — the flow has started and must finish.
      */
     INITIAL_MAX_RETRIES: 10,
 
@@ -71,5 +90,41 @@ export const CHAT_SETTINGS = {
      * hanging. Mirror the server's NATS max_payload; lower it per deployment if
      * a proxy caps smaller.
      */
-    MAX_FRAME_BYTES: 8 * 1024 * 1024
+    MAX_FRAME_BYTES: 8 * 1024 * 1024,
+
+    /**
+     * Reconnect after a dropped socket. The pause
+     * before the n-th reconnect attempt is random in
+     * [0, min(RECONNECT_MAX_MS, RECONNECT_BASE_MS × 2^(n−1))] — the
+     * full-jitter curve of the response retries, caps 1 → 2 → 4 → 8 → 10 s — with no attempt limit:
+     * while offline the SDK keeps trying at the 10 s cap, and only a server
+     * answer ends a started flow. A relay restart (close 1012) reconnects
+     * after a jitter of 0–RESTART_JITTER_MS instead. The count resets on a
+     * welcome that needs no resume, or on `resumed`.
+     */
+    RECONNECT_BASE_MS: 1_000,
+    RECONNECT_MAX_MS: 10_000,
+    RESTART_JITTER_MS: 1_000,
+
+    /**
+     * Liveness: while a run is active on a protocol-2 relay (which answers
+     * every `ping` with a `pong`), a socket with no inbound frame for this long
+     * is taken as dead (a half-open TCP) and closed with 4000, then reconnected
+     * and resumed. 3 × HEARTBEAT_INTERVAL_MS.
+     */
+    LIVENESS_MS: 15_000,
+
+    /**
+     * The relay closes a socket with 1008 after 5 refused resumes. The SDK
+     * never sends a 6th on the same socket: it opens a new one (with the
+     * reconnect backoff) instead.
+     */
+    RESUME_MAX_ATTEMPTS_PER_SOCKET: 5,
+
+    /**
+     * The wire protocol this SDK speaks: 2 = resume / resumed / resume-refused
+     * and ping → pong. Sent in every `ping`; a relay's `welcome.protocol`
+     * says what it speaks (absent = 1, a relay that cannot resume a flow).
+     */
+    PROTOCOL: 2
 } as const;

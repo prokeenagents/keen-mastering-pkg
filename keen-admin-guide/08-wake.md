@@ -65,8 +65,7 @@ spaces, its certificate, or its client — you no longer visit each record's pag
 (so there is something new to fetch), **Wake second** (so the partner fetches it). Wake alone is
 enough after a normal Save — the copy already refreshed itself — and it is the *only* thing that
 tells the partner about a space or agent change; the cascade is for when you want to be certain
-everything the partner reads is fresh at once. **After a Webhook edit the Rebuild is not optional**:
-the new Origin / URL reach the served copy only through it.
+everything the partner reads is fresh at once.
 
 ## What Wake does NOT do
 

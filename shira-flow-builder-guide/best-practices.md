@@ -80,7 +80,7 @@ Each node runs under real bounds — know them so a node doesn't fail unexpected
 
 **All nodes — the shared stores have caps:**
 - **`dictionary`** ≤ **1.5 MB**, **`session`** ≤ **1.5 MB** (and session values must be flat primitives).
-- **agent-state**: ≤ 8 MB per entry, ≤ 200 entries per channel lane.
+- **agent-state**: ≤ 8 MB per entry, ≤ 200 entries per channel lane, ≤ 8 MB written per run.
 - Exceeding a cap fails the write — keep working data lean; don't stuff megabytes into the dictionary.
 
 **Backpressure & guaranteed completion.** KeenAgents is tuned to **finish every accepted task, not to be the

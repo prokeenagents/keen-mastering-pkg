@@ -164,7 +164,12 @@ by any script on an `(app)` page; ChatShell needs it there to stamp every WS fra
 The **refresh** token never leaves the cookie: `Keen.ConsumerData` has no field for
 it, a unit test (`keen.tools.test.ts`) asserts it, and `/api/refresh` reads it
 server‑side. An XSS on an `(app)` page can still lift the access token, not the
-4‑week refresh token.
+refresh token. On Keen 15.3 the consumer's access token lives **10 minutes** and the
+refresh token **7.5 days**; each refresh returns a new pair and spends the old
+refresh token (presenting a spent one again, after a 10 s grace for a duplicate
+request, revokes every session of that consumer). The site keeps the refresh cookie
+up to 4 weeks, but the token inside it stops verifying after its own 7.5 days, and
+the visitor signs in again.
 
 Two rules every route follows:
 
@@ -185,7 +190,7 @@ Two rules every route follows:
 | `/api/login` | POST | Drive consumer login; on success set httpOnly session cookies (the tokens are **not** echoed to the browser). An OTP challenge or a refusal comes back with `isToken:false` — only the OTP hash and a safe message, never Keen's envelope. |
 | `/api/otp` | POST | Confirm the one‑time code and finish login. |
 | `/api/refresh` | POST | Rotate the session; **returns** the fresh access token in the body (the browser needs it to stamp WS frames). See [`errors.md`](errors.md) on `E3002`. |
-| `/api/logout` | POST | Expire the session cookies (the browser can't — they're httpOnly). |
+| `/api/logout` | POST | Expire the session cookies (the browser can't — they're httpOnly). It does not call Keen: Keen 15.3 has a consumer logout (`POST /keen-api/auth/logout` with `{ refresh_token: 'Bearer <refresh token>' }`) that revokes the pair, but this site version never sends it, so a copied token stays valid until it expires. |
 
 **Registration / password (claim + email‑link redeem)**
 
@@ -221,7 +226,7 @@ Two rules every route follows:
 |-------|--------|---------|
 | `/api/events` | GET | The long‑poll the browser holds open to receive pushes. |
 | `/api/keen-webhook/<KEEN_WEBHOOK_SECRET>` | POST | Receiver for org→site webhooks (a consumer/space/agent changed org‑side, and the certificate itself). The last path segment is the shared secret: a wrong one gets **401** before the body is read — see §5. The bare `/api/keen-webhook` no longer exists (404). |
-| `/api/keen-callback` | POST | Stub receiver for consumer self‑service completion callbacks (Keen POSTs `{ action, consumer, apikeyID, contractKey }` to whatever `X-Callback-Url` a redeem/update carried). entanglement does **not** pass a `callbackUrl` on any redeem/update today, and the route only answers 200 — it never reads or logs the body; wire it by passing `callbackUrl` to the connector's redeem / `update` calls (and authenticate it first: it has no secret). |
+| `/api/keen-callback` | POST | Stub receiver for consumer self‑service completion callbacks (Keen POSTs `{ action, consumer, apikeyID, contractKey }` to whatever `X-Callback-Url` a redeem/update carried; Keen 15.3 sends it only when the URL's origin is the api key's registered origin, and signs it like a webhook, §5). entanglement does **not** pass a `callbackUrl` on any redeem/update today, and the route only answers 200 — it never reads or logs the body; wire it by passing `callbackUrl` to the connector's redeem / `update` calls (and authenticate it first: it has no secret and checks no signature). |
 
 What the proxy does with an `/api/*` call, in order (`src/proxy/api/`):
 
@@ -277,7 +282,8 @@ browser holds GET /api/events open ◀── woken by the bus ──────
   receiver handles two families:
   - **Connector lifecycle** (no browser event is published):
     - `r_cert` — the one kind that arrives as a **single string**, with
-      `result: { cert, key }` (the public PEM + the shared AES secret). It is the
+      `result: { cert, key }` (the public PEM + the shared AES secret) and
+      `type: 'resource'`. It is the
       only channel that ever delivers `key`. The receiver hands it to
       `acceptCertificate(cert, key)`, which takes it **only within 60 s of a
       certificate redeem this connector started, and only once per redeem**;
@@ -299,7 +305,9 @@ browser holds GET /api/events open ◀── woken by the bus ──────
       the certificate and secret are blanked while the connector stays ready and
       keeps the old verification key, so sessions still pass the proxy yet no
       token payload opens: signed‑in pages render with no identity, no spaces and
-      no chat. Keep a secret on the certificate.
+      no chat. Keep a secret on the certificate. (Keen 15.3 refuses to clear a
+      certificate's secret — an edit can only replace it — so this needs an older
+      Keen.)
     - `r_cert_delete` — clears the certificate and marks the connector inactive
       (every page to `/maintenance`) until the next `reconnect()` (a WAKE) or a
       restart.
@@ -348,7 +356,11 @@ no poll parked is queued, and the first browser to poll next takes it — the ot
 never see it (a returning hidden tab's refresh covers the data, not the notice). A
 targeted event waits in its consumer's queue until that consumer polls; a process
 that restarts (or scales to zero) starts with empty queues, so a forced logout
-sent meanwhile is lost — the relay still checks the token on every chat frame.
+sent meanwhile is lost — the relay still checks the token on every chat frame, and
+on Keen 15.3 it also refuses (`E3002`) the token of a session that was revoked
+(the consumer deleted or disabled, its password changed, its spaces narrowed, the
+contract re‑keyed, a logout, a reused refresh token)
+before the token expires.
 
 > Why a forced logout rather than a silent refresh on a space/entitlement change:
 > a consumer's entitlements live in the session token, so only a fresh login
@@ -364,8 +376,9 @@ sent meanwhile is lost — the relay still checks the token on every chat frame.
 2. `GET /keen-api/resources/certificate` — a single‑use code (120 s TTL on Keen).
 3. `POST /keen-api/resources/certificate` with that code — the **redeem**. Keen
    checks the code, then ms-api-keys POSTs
-   `{ 'synch-data': 'r_cert', result: { cert, key } }` to the `webhook` URL of the
-   record bound to the api_key. The redeem's own reply carries no certificate.
+   `{ 'synch-data': 'r_cert', result: { cert, key }, type: 'resource' }` to the
+   `webhook` URL of the record bound to the api_key. The redeem's own reply carries
+   no certificate.
 
 The redeem opens the 60 s acceptance window *before* its request goes out, because
 Keen may post `r_cert` before the redeem's reply comes back. `tryActivate` then
@@ -385,8 +398,25 @@ the claim and the redeem succeeding every ~16 s and nothing arriving.
 
 ### Who may call the webhook: the secret path
 
-Keen does not sign these POSTs — ms-api-keys sends a plain JSON body with only a
-`Content-Type` header — so the URL itself is the shared secret:
+**What Keen 15.3 sends.** Every webhook POST (and every completion callback) is
+signed with the api key's certificate secret — the `key` the site receives in
+`r_cert`:
+
+| Header | Value |
+|---|---|
+| `X-Keen-Timestamp` | Unix seconds, as a string |
+| `X-Keen-Signature` | `sha256=<hex>` = HMAC‑SHA256 over `<X-Keen-Timestamp>.<raw body>`, under a 32‑byte key = HKDF‑SHA256(the certificate secret, empty salt, info `keen/webhook-signature/v1`) |
+| `X-Keen-Delivery` | a new uuid v4 per POST (to drop a replay) |
+| `User-Agent` | `Keen-Webhooks/1.0` |
+
+A receiver that verifies it recomputes the signature over the raw body bytes before
+any JSON parse, compares in constant time, and refuses a timestamp more than 300 s
+from its clock. `r_cert` itself is signed with the secret it carries. An api key
+with no certificate sends nothing at all (nothing to sign with).
+
+**What the public site checks.** This site version does **not** read those headers
+(a site update that verifies them is coming), so the URL itself is its shared
+secret:
 
 - The only route is **`POST /api/keen-webhook/<secret>`**. The handler compares the
   segment with `KEEN_WEBHOOK_SECRET` (both sides SHA‑256‑hashed, then a
@@ -409,10 +439,10 @@ What a holder of the URL can still do: push `r_cert_delete` (the site drops to
 `/maintenance`), a consumer‑targeted kind with any `consumer.id` (a forced logout),
 cache re‑reads, and a certificate inside a redeem window. Treat the URL as a
 credential. It is stored in the Keen admin's webhook record, and it shows up
-wherever full request URLs are logged — Keen's ms-api-keys logs the URL on a failed
-delivery and on a WAKE, and a hosting platform's request log records the path. If
-it leaks, rotate it in both places (env + record). Restricting the path to the Keen
-platform's egress addresses adds a second layer.
+wherever full request URLs are logged — Keen 15.3's own log lines carry only the
+host, but a hosting platform's request log (and `next dev`'s console) records the
+path. If it leaks, rotate it in both places (env + record). Restricting the path to
+the Keen platform's egress addresses adds a second layer.
 
 ### A WAKE in open browsers
 

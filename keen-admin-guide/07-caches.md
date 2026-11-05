@@ -23,11 +23,10 @@ they have their own per-agent channel and are read on demand. Only the light age
 ## How it stays fresh (you don't manage this)
 
 - **On every change.** Create / edit / delete / bind / unbind a space, agent, api key, client,
-  certificate or contract → the affected resource copy is rebuilt immediately, and every reader
-  (admin UI, partner sites) re-reads. There is **no refresh interval to wait out** — a save is
-  visible on the next fetch. Two exceptions: the `roles` copy, and a **Webhook record's own
-  fields** (name / origin / URL), are refreshed only by a Rebuild (or, for the webhook, by saving
-  the api key that binds it).
+  certificate or contract — or edit a webhook bound to a key → the affected resource copy is rebuilt
+  immediately, and every reader (admin UI, partner sites) re-reads. There is **no refresh interval
+  to wait out** — a save is visible on the next fetch. One exception: the `roles` copy is refreshed
+  only by a Rebuild.
 - **On startup** — each reader primes its copy when it comes up.
 - **After any interruption** — a reader re-reads everything when its connection recovers, and the
   partner-facing chat relay additionally re-reads on a ~30 s safety-net tick, so a copy can never
@@ -123,10 +122,9 @@ Wake are two separate things — see `08-wake.md`.
 
 ## Watch out for
 
-- **Don't Rebuild after a normal Save** — it's redundant; the copy already refreshed. (Redundant,
-  not harmful: the README's "one Rebuild, one Wake" after a change is the always-safe routine.) The
-  exception is a **Webhook** edit — its new Origin / URL reach the copy only through a Rebuild on its
-  key (or on the webhook's own page).
+- **Don't Rebuild after a normal Save** — it's redundant; the copy already refreshed, a **Webhook**
+  edit included. (Redundant, not harmful: the README's "one Rebuild, one Wake" after a change is the
+  always-safe routine.)
 - **Invalidate leaves a gap** — nothing is served for that resource until it rebuilds. Prefer
   Rebuild (atomic swap) unless you specifically want it empty.
 - **The buttons are permission-gated** — if a teammate says "I don't see a Rebuild button," they're

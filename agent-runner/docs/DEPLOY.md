@@ -47,7 +47,9 @@ On failure:
 {"t":"rejected","error":"Deployment rejected","message":"… 2 issue(s) …","issues":[ … ]}      // security scan
 {"t":"rejected","error":"Invalid project structure","message":"…","reasons":["flows/ directory is missing"]}
 {"t":"fail","step":"connect","status":403, …}                        // bad deploy token / space (401 = a header missing · 503 = platform still bootstrapping)
+{"t":"fail","step":"upload","status":403, …}                         // "No active connection — connect before deploying": the session was evicted (a connect for another space) or expired
 {"t":"fail","step":"upload","status":409, …}                         // a newer upload for the same space superseded this one
+{"t":"fail","step":"upload","status":413, …}                         // the bundle is over the server's 200 MB upload cap
 {"t":"fail","step":"request","error":"fetch failed: …"}              // deploy.ts: network / TLS failure (keen-deploy reports it as status 0)
 ```
 Exit code: `0` deployed · `1` rejected / failed (including a network or TLS failure) · `2` bad args or a directory without `flows/` (nothing was sent).

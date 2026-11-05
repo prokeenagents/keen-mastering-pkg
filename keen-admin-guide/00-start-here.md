@@ -95,8 +95,7 @@ account creates these and wires them up through the Keen MCP server; in the admi
 KeenAgents keeps a **ready-to-serve copy** of your configuration (your spaces, agents, API keys, and
 so on) so that admin pages and partner sites load **instantly** instead of waiting for a lookup every
 time. The important part: **it keeps this copy up to date for you automatically.** The moment you
-save a change, the copy refreshes — no button, no waiting. (One exception: an edit to a **Webhook**
-reaches the copy only when you press Rebuild on its key — `07-caches.md`.)
+save a change, the copy refreshes — no button, no waiting.
 
 So why is there a **Rebuild** button at all? As a just-in-case. If you ever suspect something didn't
 refresh (say after a big batch of changes, or a partner reports stale data), you can press it to

@@ -12,7 +12,7 @@ With an **empty** folder open, the panel's **Create Project** button writes this
 
 ```
 .vscode/
-  keen.json          ← deploy target (you fill this)
+  keen.json          ← deploy target + your debugger login (you fill this; git-ignore it)
   settings.json      ← {} placeholder
 src/
   flows/
@@ -65,15 +65,17 @@ separation is what keeps "a flow", "a script", and "a tool" unambiguous to both 
 
 ---
 
-## `.vscode/keen.json` — the deploy target
+## `.vscode/keen.json` — the deploy target and your debugger login
 
-Exactly **three** string fields:
+**Five** string fields — the first three for deploying, the last two for debugging — plus one optional `debugHost`:
 
 ```json
 {
-  "server": "https://keen.example.com",
-  "space":  "<your-space-id>",
-  "token":  "<your-deployment-token>"
+  "server":   "https://keen.example.com",
+  "space":    "<your-space-id>",
+  "token":    "<your-deployment-token>",
+  "user":     "<your console e-mail>",
+  "password": "<your console password>"
 }
 ```
 
@@ -82,9 +84,20 @@ Exactly **three** string fields:
 | **`server`** | Base URL of your KeenAgents instance (deploy calls go to `{server}/ms/deploy/v1/project/…`; it's also the **host** the debuggers attach to). | `https://keen.example.com` (your instance's host); `https://localhost` for a local sandbox. |
 | **`space`** | The AI **Space id** — **and** the engine's **project id** (your deployed code lives under that id). | Copy the Space ID from the admin console (a `cm…` id). |
 | **`token`** | The Space's **deployment token**. | Copy/Reset it on the Space's page in the admin. |
+| **`user`** | The e-mail of **your console account** — the debuggers sign in with it (`debugging.md`). | The address you log in to the admin console with. Needed only for debugging. |
+| **`password`** | That account's password. | Your console password. Needed only for debugging. |
 
-The scaffold writes `[REPLACE_WITH_…]` placeholders; **Connect refuses** to run until you replace all
-three with real values. (See *the panel* for Connect/Upload.)
+**`debugHost`** (optional) is a bare host name — no scheme, port or path — used only when the server has no
+443 debug edge: the extension then reaches the debugger ports on it instead of on `server`'s host.
+
+The scaffold writes `[REPLACE_WITH_…]` placeholders; **Connect refuses** to run until you replace
+`server`, `space` and `token` with real values. (See *the panel* for Connect/Upload.) `user` and `password`
+matter only to the debuggers: the extension signs in with them each time you start one.
+
+> **`keen.json` is a local secrets file — never commit it.** It holds the deployment token and your
+> password. Add `.vscode/keen.json` to the project's `.gitignore` (`keen-validate` warns while it is not
+> git-ignored), and don't share or zip it by hand. The deploy never uploads it — dot-entries such as
+> `.vscode/` are skipped.
 
 ## `src/keen-tools.json` — the tool registry
 

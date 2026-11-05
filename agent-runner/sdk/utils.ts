@@ -1,3 +1,5 @@
+import { CHAT_SETTINGS } from './settings';
+
 /**
  * An RFC-4122 v4 UUID from `crypto.getRandomValues` — the Web Crypto global,
  * present in every supported browser and in Node >= 19.
@@ -103,6 +105,58 @@ export class FatalSendError extends Error {
     }
 }
 
+/**
+ * The failure texts of a lost connection — a contract:
+ * sites match on them.
+ */
+export const CONNECTION_LOST_TEXT = {
+    /** `resume-refused` `gone` / `protocol`: the grace ran out, or a cancel came first. */
+    GONE: 'connection lost — the server no longer holds this flow',
+    /** Close 4409: this cid was resumed on a newer connection. */
+    SUPERSEDED: 'connection taken over by another session',
+    /** A drop during a running flow on a relay whose welcome carries no `protocol`. */
+    OLD_RELAY: 'connection lost — this Keen server cannot resume a flow',
+    /** A token refusal whose refresh (`onAuthExpired`) answered null. */
+    INVALID_TOKEN: 'Invalid token'
+} as const;
+
+/**
+ * The flow's correlationID can no longer be driven from this client: the
+ * server ended it (`gone`), refused the resume for good (`protocol`, a token
+ * whose refresh answered null), another connection took it over (4409), or the
+ * relay cannot resume (an old relay). FATAL like FatalSendError: the node
+ * retry loops re-throw it, and the run's catch does NOT send a cancel — the
+ * cid is not attached to this socket any more.
+ *
+ * `restartable` marks the gone / protocol refusals: if the only frame ever
+ * sent on the old cid was the run frame and no reply came, the flow had not
+ * started, so TaskQueue re-sends the start on the NEW cid.
+ */
+export class ConnectionLostError extends Error {
+    readonly fatal = true as const;
+    readonly code: string;
+    readonly restartable: boolean;
+
+    constructor(message: string, opts: { code?: string; restartable?: boolean } = {}) {
+        super(message);
+        this.name = 'ConnectionLostError';
+        this.code = opts.code ?? 'E5201';
+        this.restartable = opts.restartable === true;
+    }
+}
+
+/**
+ * The pause before the n-th reconnect attempt: the same
+ * full-jitter curve as the response retries — random in [0, min(10 s, 1 s × 2^(n−1))].
+ */
+export function reconnectDelayMs(attempt: number, random?: () => number): number {
+    return retryBackoffMs(attempt, {
+        baseMs: CHAT_SETTINGS.RECONNECT_BASE_MS,
+        maxMs: CHAT_SETTINGS.RECONNECT_MAX_MS,
+        random
+    });
+}
+
 /** UTF-8 byte length of a string, without allocating a second big buffer where
  *  possible (Buffer in Node, Blob in the browser, TextEncoder as the fallback). */
 export function byteLength(text: string): number {
@@ -124,6 +178,48 @@ export function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => {
         setTimeout(resolve, ms);
     });
+}
+
+/**
+ * The pause before a CONTINUATION's next response retry (Keen 15.3 decision
+ * 44): exponential backoff with FULL jitter. `failures` = the failures in a row
+ * so far (1 after the first). The cap doubles from the base — 1 → 2 → 4 → 8 →
+ * 10 s — and the pause is random in [0, cap], so N clients refused together
+ * never retry in lockstep. A `hintMs` (an E4 refusal's `retryAfterMs`) wins,
+ * capped at the same maximum.
+ */
+export function retryBackoffMs(
+    failures: number,
+    opts: { baseMs: number; maxMs: number; hintMs?: number | null; random?: () => number }
+): number {
+    if (typeof opts.hintMs === 'number' && Number.isFinite(opts.hintMs) && opts.hintMs >= 0) {
+        return Math.min(opts.maxMs, Math.floor(opts.hintMs));
+    }
+
+    const cap = Math.min(opts.maxMs, opts.baseMs * Math.pow(2, Math.max(0, failures - 1)));
+
+    return Math.floor((opts.random ?? Math.random)() * cap);
+}
+
+/**
+ * A refusal's retry hint, when the server sends one: `retryAfterMs` on an
+ * E4xxx envelope (top level, or under `details`). Null otherwise — the relay
+ * does not send one today; the SDK honours it when it does.
+ */
+export function retryAfterHintMs(envelope: unknown): number | null {
+    if (!envelope || typeof envelope !== 'object') {
+        return null;
+    }
+
+    const env = envelope as { code?: unknown; retryAfterMs?: unknown; details?: { retryAfterMs?: unknown } | null };
+
+    if (typeof env.code !== 'string' || !env.code.startsWith('E4')) {
+        return null;
+    }
+
+    const hint = env.retryAfterMs ?? env.details?.retryAfterMs;
+
+    return typeof hint === 'number' && Number.isFinite(hint) && hint >= 0 ? hint : null;
 }
 
 /**

@@ -28,7 +28,11 @@ import WSConnectAPI from './connect';
  *   const nodeRequestId = await chat.sendNodeTask(payload, { maxRetries: Infinity });
  *
  *   chat.sendCancel(correlationID);                              // terminate whole flow
- *   chat.disconnect();
+ *   chat.disconnect();                                            // cancels a running flow first
+ *
+ * A dropped socket reconnects by itself and RESUMES a running flow on its
+ * cid: status 'reconnecting', then onResume. Pass
+ * ChatAPIOptions.onAuthExpired to refresh an expired token on the way.
  */
 export default class ChatAPI {
     readonly wsConnectApi: WSConnectAPI;
@@ -65,6 +69,15 @@ export default class ChatAPI {
      * non-positive batch would stall the fan-out loop). See ChatAPIOptions.contextBatchSize.
      */
     readonly contextBatchSize?: number;
+    /**
+     * The token refresher: called once per `token`
+     * refusal of a resume, and once per node visit on an E3002 reply. A
+     * string becomes the access token; null ends the run with `Invalid token`.
+     * See ChatAPIOptions.onAuthExpired.
+     */
+    private readonly onAuthExpired?: () => Promise<string | null>;
+    /** The `pagehide` listener (browser only), registered on connect(). */
+    private pageHideListener: ((event: Event) => void) | null = null;
 
     constructor(options: App.Chat.ChatAPIOptions) {
         this.spaceID = options.spaceID;
@@ -80,12 +93,22 @@ export default class ChatAPI {
             typeof options.contextBatchSize === 'number' && Number.isInteger(options.contextBatchSize) && options.contextBatchSize > 0
                 ? options.contextBatchSize
                 : undefined;
+        this.onAuthExpired = typeof options.onAuthExpired === 'function' ? options.onAuthExpired : undefined;
         this.responseApi = new ResponseAPI();
         // url defaults to the SDK's configured relay endpoint (CHAT_SETTINGS.WS_URL);
         // pass options.url only to point at a different relay per deployment.
         this.wsConnectApi = new WSConnectAPI(options.url ?? CHAT_SETTINGS.WS_URL, this.responseApi);
         this.sendRequestApi = new SendRequest(this.wsConnectApi);
         this.taskQueue = new TaskQueue(this);
+        this.responseApi.setSettleHook((requestId) => this.sendRequestApi.settle(requestId));
+        this.wsConnectApi.setHost({
+            flowActive: () => this.taskQueue.isRunning(),
+            identity: () => ({ userId: this.taskQueue.runUserId() ?? this.userId, accessToken: this.accessToken }),
+            hasAuthHook: () => this.hasAuthHook(),
+            refreshAccessToken: () => this.refreshAccessToken(),
+            resendAll: () => this.sendRequestApi.resendAll(this.accessToken),
+            lost: (err) => this.taskQueue.connectionLost(err)
+        });
     }
 
     /**
@@ -113,6 +136,33 @@ export default class ChatAPI {
      */
     setAccessToken(accessToken: string): void {
         this.accessToken = accessToken;
+        // A resume refused `token` with no onAuthExpired hook waits for exactly this.
+        this.wsConnectApi.tokenChanged(accessToken);
+    }
+
+    /** True when ChatAPIOptions.onAuthExpired was given. */
+    hasAuthHook(): boolean {
+        return this.onAuthExpired !== undefined;
+    }
+
+    /**
+     * Call onAuthExpired once. A non-empty string is applied (setAccessToken)
+     * and returned; null (or no hook) returns null. A throw propagates — the
+     * callers retry after the backoff rather than end a started flow.
+     */
+    async refreshAccessToken(): Promise<string | null> {
+        if (!this.onAuthExpired) {
+            return null;
+        }
+
+        const token = await this.onAuthExpired();
+
+        if (typeof token === 'string' && token.length > 0) {
+            this.setAccessToken(token);
+            return token;
+        }
+
+        return null;
     }
 
     /**
@@ -128,6 +178,7 @@ export default class ChatAPI {
      * request.
      */
     connect(): void {
+        this.installPageHide();
         this.wsConnectApi.connect();
     }
 
@@ -135,10 +186,31 @@ export default class ChatAPI {
      * Close the WebSocket and dispose pending response waiters.
      * Pending waitFor promises reject with a clear error so callers
      * do not hang past the lifetime of the connection.
+     *
+     * A running flow is CANCELLED first: the relay no
+     * longer cancels on a close (it holds the flow for its grace so a dropped
+     * socket can resume), and a disposed ChatAPI can never resume — so the
+     * app dropping the chat ends the flow explicitly.
      */
     disconnect(): void {
+        this.wsConnectApi.markClosing();
+
+        if (this.taskQueue.isRunning()) {
+            // Sent now on a ready socket; while reconnecting it cannot be (the relay's grace ends the flow).
+            this.taskQueue.cancel();
+        }
+
+        this.removePageHide();
         this.wsConnectApi.disconnect();
         this.responseApi.dispose();
+    }
+
+    /**
+     * True when the socket is open AND bound to the flow's cid — false
+     * between a reconnect's welcome and its `resumed`.
+     */
+    isReady(): boolean {
+        return this.wsConnectApi.isReady();
     }
 
     isConnected(): boolean {
@@ -160,6 +232,14 @@ export default class ChatAPI {
      */
     getCorrelationID(): string | null {
         return this.wsConnectApi.getCorrelationID();
+    }
+
+    /**
+     * The longest prompt, in characters, the relay accepts (`welcome.limits.promptChars`,
+     * 20000 today); null until a welcome carried it. A longer prompt is refused with E2101.
+     */
+    getPromptLimit(): number | null {
+        return this.wsConnectApi.getPromptLimit();
     }
 
     /**
@@ -186,15 +266,30 @@ export default class ChatAPI {
     }
 
     /**
+     * Subscribe to a resumed flow: `{ correlationID, detachedMs }`
+     * after the relay re-bound a new socket to the running flow's cid. The
+     * token stream emitted while the socket was away is not replayed — re-read
+     * the chat history when the resumed turn ends.
+     */
+    onResume(handler: App.Chat.ResumeHandler): App.Chat.Unsubscribe {
+        return this.wsConnectApi.onResume(handler);
+    }
+
+    /**
      * Fire an INITIAL prompt — wraps it in InitialRunPayload and
      * sends with bounded retries (10 attempts, 1s delay). The matching
      * response envelope (carrying the initial FlowTaskBundle) arrives
      * via onResponse subscribers OR can be awaited via waitFor.
      *
-     * Throws if all retries fail.
+     * Throws if all retries fail. opts.requestId keeps one id across the run
+     * frame's attempts (the visit id).
      */
-    async send(input: App.Chat.InitialRunPayload): Promise<string> {
-        const sent = await this.sendRequestApi.execute(input, { maxRetries: CHAT_SETTINGS.INITIAL_MAX_RETRIES });
+    async send(input: App.Chat.InitialRunPayload, opts?: ExecuteOptions): Promise<string> {
+        const sent = await this.sendRequestApi.execute(input, {
+            maxRetries: opts?.maxRetries ?? CHAT_SETTINGS.INITIAL_MAX_RETRIES,
+            requestId: opts?.requestId,
+            isAborted: opts?.isAborted
+        });
 
         if (!sent.ok) {
             throw new Error(sent.error);
@@ -215,7 +310,9 @@ export default class ChatAPI {
      */
     async sendNodeTask(payload: App.Chat.NodeTaskRequest, opts?: ExecuteOptions): Promise<string> {
         const sent = await this.sendRequestApi.execute(payload, {
-            maxRetries: opts?.maxRetries ?? Number.POSITIVE_INFINITY
+            maxRetries: opts?.maxRetries ?? Number.POSITIVE_INFINITY,
+            requestId: opts?.requestId,
+            isAborted: opts?.isAborted
         });
 
         if (!sent.ok) {
@@ -234,7 +331,9 @@ export default class ChatAPI {
      */
     async sendContextRun(payload: App.Chat.ContextRunPayload, opts?: ExecuteOptions): Promise<string> {
         const sent = await this.sendRequestApi.execute(payload, {
-            maxRetries: opts?.maxRetries ?? Number.POSITIVE_INFINITY
+            maxRetries: opts?.maxRetries ?? Number.POSITIVE_INFINITY,
+            requestId: opts?.requestId,
+            isAborted: opts?.isAborted
         });
 
         if (!sent.ok) {
@@ -287,6 +386,16 @@ export default class ChatAPI {
     }
 
     /**
+     * Subscribe to the chat-compression transitions (the Summarizer node). Fires `true` when the
+     * SDK dispatches a node task of kind `summarizerNode` and `false` when that task settles (its reply,
+     * an error, a cancel, the flow's end) — never left stuck at `true`. While it is `true` the flow is
+     * still running (isRunning() stays true): show "Compressing the conversation…" and keep Send off.
+     */
+    onSummarizing(handler: App.Chat.SummarizingHandler): App.Chat.Unsubscribe {
+        return this.taskQueue.onSummarizing(handler);
+    }
+
+    /**
      * Synchronous snapshot of the in-flight flag. True while a runFlow
      * is executing; false otherwise.
      */
@@ -313,20 +422,36 @@ export default class ChatAPI {
             data: { correlationId: cid }
         };
 
-        return this.wsConnectApi.sendFrame(frame);
+        if (this.wsConnectApi.sendFrame(frame)) {
+            return true;
+        }
+
+        /**
+         * The socket is away (reconnecting) or not resumed yet: DEFER the cancel
+         *. The next socket resumes the cid — proving it owns it
+         * — and then sends this cancel. If it never gets back, the relay's grace
+         * ends the flow.
+         */
+        if (this.wsConnectApi.canResume(cid)) {
+            this.wsConnectApi.deferCancel(cid);
+        }
+
+        return false;
     }
 
     /**
      * Fire a heartbeat ping. Relay derives the cid from the WebSocket
-     * itself; no payload. TaskQueue calls this every
+     * itself; the payload is `{ protocol: 2 }` only. TaskQueue calls this every
      * CHAT_SETTINGS.HEARTBEAT_INTERVAL_MS (5s) while a run is in flight so the engine's dict / session TTLs stay fresh
      * across idle gaps between per-node calls. Returns false if the
      * socket is not open — caller decides whether to retry.
      */
     sendPing(): boolean {
+        // `protocol: 2` asks the relay for a `pong` (the liveness check);
+        // an old relay ignores the field.
         const frame: App.Chat.OutboundFrame = {
             event: 'ping',
-            data: {}
+            data: { protocol: CHAT_SETTINGS.PROTOCOL }
         };
 
         return this.wsConnectApi.sendFrame(frame);
@@ -346,5 +471,38 @@ export default class ChatAPI {
 
     onStream(handler: App.Chat.StreamEventHandler): App.Chat.Unsubscribe {
         return this.responseApi.onStream(handler);
+    }
+
+    /**
+     * Browser only: a reload or a tab close cannot
+     * resume a flow (its execution state is in this tab's memory), so a
+     * `pagehide` that is not a bfcache entry (`!event.persisted`) cancels a
+     * running flow, best-effort. Guarded on `typeof window` for Node.
+     */
+    private installPageHide(): void {
+        if (this.pageHideListener || typeof window === 'undefined' || typeof window.addEventListener !== 'function') {
+            return;
+        }
+
+        this.pageHideListener = (event: Event) => {
+            if ((event as Event & { persisted?: boolean }).persisted === true) {
+                return;
+            }
+
+            if (this.taskQueue.isRunning()) {
+                this.taskQueue.cancel();
+            }
+        };
+
+        window.addEventListener('pagehide', this.pageHideListener);
+    }
+
+    private removePageHide(): void {
+        if (!this.pageHideListener || typeof window === 'undefined') {
+            return;
+        }
+
+        window.removeEventListener('pagehide', this.pageHideListener);
+        this.pageHideListener = null;
     }
 }

@@ -15,10 +15,14 @@ What entanglement is, in one line: **the BROWSER consumer of the Keen ChatSDK.**
 The ChatSDK is a small, self‑contained TypeScript client (it lives in
 `src/service/services/chat/`, written with zero project imports so it can be
 lifted into its own package). entanglement wires that SDK into a Next.js site;
-a *copy* of the same SDK (`agent-runner/sdk/`) also runs headless in the sibling
-`agent-runner` CLI (`agent-runner/run.ts`), so nothing about it is browser‑specific.
-For a headless caller the SDK also ships `KeenChat` (`chat/keen-chat.ts`), a
-minimal `{ ws, token, email }` connector — see [`chat-sdk.md`](chat-sdk.md) §1.
+the same SDK also runs headless in the sibling `agent-runner` CLI
+(`agent-runner/run.ts`), so nothing about it is browser‑specific. The toolkit's
+copy (`agent-runner/sdk/`) is already the **Keen 15.3** version (a dropped socket
+reconnects and resumes the turn, the prompt limit, the Summarizer signal); the
+public site still ships the earlier SDK, and a site update for 15.3 is coming —
+[`chat-sdk.md`](chat-sdk.md) §8 lists the differences. For a headless caller the
+site's SDK also ships `KeenChat` (`chat/keen-chat.ts`), a minimal
+`{ ws, token, email }` connector — see [`chat-sdk.md`](chat-sdk.md) §1.
 
 ---
 
@@ -48,10 +52,10 @@ Copy `.env.example` to `.env.local` and fill in:
 | Var | Required | What it is |
 |-----|----------|------------|
 | `KEEN_HOST` | yes | The Keen edge base URL (dev: `https://localhost`). Every connector call goes to `${KEEN_HOST}/keen-api/*`. Must be a full `http(s)://` URL — a bare host fails the boot. |
-| `KEEN_ORIGIN` | yes | This app's public origin, an **exact** `scheme://host[:port]` (a full `http(s)://` URL, checked at boot). It is sent as the `Origin` header on every connector call and must equal the `origin` of the **webhook record** bound to the api_key. Keen's allow‑list is the set of those origins across every **fully‑bound** api_key — client, certificate, consumer contract and webhook record all bound (an empty set = any origin); a half‑wired key's origin is not on it. An origin not on the list is dropped silently by Keen's OriginGuard (no HTTP status; a 502 through nginx). Serve the pages from this same origin: the chat WebSocket is checked against the same list. It is also the base of every email link (`/confirmation/<hash>`, `/set-password/<hash>`, `/confirm-password/<hash>`), and the CSRF guard accepts its host (see [`architecture.md`](architecture.md) §4). (The site's own `.env.example` says the origin is "allow‑listed on the Keen api_key"; the record's origin is what counts.) |
+| `KEEN_ORIGIN` | yes | This app's public origin, an **exact** `scheme://host[:port]` (a full `http(s)://` URL, checked at boot). It is sent as the `Origin` header on every connector call and must equal the `origin` of the **webhook record** bound to the api_key. Keen's allow‑list is the set of those origins across every **fully‑bound** api_key — client, certificate, consumer contract and webhook record all bound; a half‑wired key's origin is not on it, and an empty list refuses every origin (Keen 15.3 fails closed). An origin not on the list is dropped silently by Keen's OriginGuard (no HTTP status; a 502 through nginx). Serve the pages from this same origin: the chat WebSocket is checked against the same list. It is also the base of every email link (`/confirmation/<hash>`, `/set-password/<hash>`, `/confirm-password/<hash>`), and the CSRF guard accepts its host (see [`architecture.md`](architecture.md) §4). (The site's own `.env.example` says the origin is "allow‑listed on the Keen api_key"; the record's origin is what counts.) |
 | `KEEN_CLIENT_ID` / `KEEN_CLIENT_SECRET` | yes | The partner client bound to the api_key. |
 | `KEEN_API_KEY_ID` / `KEEN_API_KEY_SECRET` | yes | The api_key id (a cuid) + its secret. |
-| `KEEN_WEBHOOK_SECRET` | yes | The secret path segment of the webhook URL: the record's `webhook` is any URL that reaches the site plus `/api/keen-webhook/<KEEN_WEBHOOK_SECRET>`. At least 32 characters or the boot refuses (`openssl rand -hex 32` gives 64). See [`architecture.md`](architecture.md) §5. |
+| `KEEN_WEBHOOK_SECRET` | yes | The secret path segment of the webhook URL: the record's `webhook` is an `https://` URL that reaches the site plus `/api/keen-webhook/<KEEN_WEBHOOK_SECRET>`. At least 32 characters or the boot refuses (`openssl rand -hex 32` gives 64). It is the public site's only check of a delivery: Keen 15.3 also signs every webhook (`X-Keen-Signature`), but this site version does not verify it yet. See [`architecture.md`](architecture.md) §5. |
 | `KEEN_WS` | no | The relay WebSocket endpoint the browser connects to (`wss://<host>/ws-keen`; `ws://` only on plain http). **If unset the ChatSDK silently falls back to `CHAT_SETTINGS.WS_URL` (`ws://localhost/ws-keen`)**, which never connects to a Keen nginx edge: its port 80 answers every path but `/healthz` with a 301 to https, and a WebSocket upgrade doesn't follow redirects (close 1006). Always set it — see *A local Keen stack* below. |
 | `ELEVENLABS_API_KEY` | no | Server‑only key for dictation (ElevenLabs Scribe). Unset, the mic button still shows, and a recording comes back with the route's 503 "not configured" message. See *Dictation* below. |
 | `ELEVENLABS_STT_MODEL` | no | The Scribe model; default `scribe_v2`. |
@@ -76,6 +80,10 @@ secrets into the client bundle.
   routes. The space list comes back org‑wide; the connector keeps only the spaces
   of its own consumer contract, without their `deploymentToken`, before caching it
   (`keen.space-scope.ts`).
+- The application token Keen 15.3 mints lives **365 days**. The connector fetches
+  it at boot and again only on `reconnect()` (an `r_api_keys` webhook or a WAKE);
+  a process that runs longer than a year without either is refused by Keen until
+  it restarts.
 - The boot is done when the application token and the certificate are in hand
   (`isReady`) **and** the first contract / policy / space‑list reads have run
   (`isActivated`). Until then the proxy holds each request up to 10 s
@@ -84,11 +92,15 @@ secrets into the client bundle.
   contract loaded shows a "We're a little busy" card on the guest pages instead
   (`checkPageAvailability`). How the certificate arrives at boot, and when a WAKE
   is still needed: [`architecture.md`](architecture.md) §5.
-- The certificate must carry a **shared secret key** (Keen admin → the certificate
-  → generate a secret). The connector refuses a certificate without one — at boot
-  it stays on `/maintenance`, logging `Certificate REFUSED` — because Keen would
-  otherwise seal sessions, OTP and registration hashes with a fixed public default
-  key (`keen.crypto.ts` has no fallback key either).
+- The certificate carries a **shared secret key**. On Keen 15.3 it is required
+  when the certificate is created (16–32 characters; the console pre‑fills a
+  generated one, **Generate** makes another), it is shown only in the create
+  reply, and an edit can replace it but never clear it. The site receives it on
+  the `r_cert` webhook ([`architecture.md`](architecture.md) §5), seals sessions,
+  OTP and registration hashes with it, and since 15.3 it is also the key Keen signs
+  webhooks with. The connector still refuses a certificate without one — at boot
+  it stays on `/maintenance`, logging `Certificate REFUSED` — and `keen.crypto.ts`
+  has no fallback key.
 
 ### A local Keen stack — a working browser chat
 
@@ -100,12 +112,21 @@ Three things are checked separately and must line up:
 
 1. **The webhook record** bound to the api_key has two independent fields: `origin`
    (the allow‑list entry, exact `scheme://host[:port]`) and `webhook` (the URL Keen
-   POSTs to). Keen's services run in containers, so `webhook` must be reachable
-   *from them* — `http://localhost:3000` there is the container itself, not your
-   site. A tunnel to the site
-   (`https://<tunnel-host>/api/keen-webhook/<KEEN_WEBHOOK_SECRET>`) works. The bare
-   `/api/keen-webhook` no longer exists: a record still pointing there gets 404 and
-   the certificate never arrives.
+   POSTs to). Keen 15.3 POSTs only to an `https://` URL on a public address, never
+   follows a redirect (a 3xx is a failed delivery), and refuses `localhost`, a
+   private IP or a single‑label name; `http://` is allowed only for a host the
+   operator allow‑listed. Keen's services also run in containers, so `webhook` must
+   be reachable *from them*:
+   - a **development** stack allow‑lists `host.docker.internal` (the machine the
+     containers run on), so
+     `http://host.docker.internal:3000/api/keen-webhook/<KEEN_WEBHOOK_SECRET>`
+     reaches a site running on the same machine;
+   - a **production‑template** stack allow‑lists nothing: use a public https
+     tunnel to the site
+     (`https://<tunnel-host>/api/keen-webhook/<KEEN_WEBHOOK_SECRET>`).
+
+   The bare `/api/keen-webhook` no longer exists: a record still pointing there
+   gets 404 and the certificate never arrives.
 2. **`KEEN_ORIGIN` equals the record's `origin`**, and you open the pages from
    exactly that origin.
 3. **`KEEN_WS` matches the page's scheme.**
@@ -115,7 +136,7 @@ Two combinations work, both only in a browser on the machine that runs the stack
 
 | Pages served from (= `origin` = `KEEN_ORIGIN`) | `KEEN_WS` | Note |
 |---|---|---|
-| `http://localhost:3000` | `ws://localhost:5520/ws` or `wss://localhost/ws-keen` | `webhook` points at a tunnel to the site |
+| `http://localhost:3000` | `ws://localhost:5520/ws` (development stack only) or `wss://localhost/ws-keen` | `webhook` = the `host.docker.internal` URL above (development) or a tunnel to the site |
 | the tunnel, `https://<tunnel-host>` | `wss://localhost/ws-keen` | `ws://` is blocked on this https page as mixed content |
 
 For the second row under `npm run dev*`, the tunnel's host must be in
@@ -174,7 +195,7 @@ Keen side; follow it rather than this summary. What matters to an integrator:
   site holds no open request; the first visitor after an idle spell is held up to
   10 s while the connector boots.
 - On Keen, the webhook record's origin is the site's public origin and its
-  `webhook` is `<a URL that reaches the service>/api/keen-webhook/<KEEN_WEBHOOK_SECRET>`.
+  `webhook` is `<an https URL that reaches the service>/api/keen-webhook/<KEEN_WEBHOOK_SECRET>`.
 - Every process started with `NODE_ENV=production` (`next start` or the image)
   exits on missing Keen config, ignores `ENTANGLEMENT_DEMO`, and sets the session
   cookies `Secure` — so serve it over https.
@@ -259,7 +280,7 @@ forced logout or a "space changed" notice into an open browser.
 |------|----------------|
 | [`architecture.md`](architecture.md) | The layers: route groups, the layer stack, server‑seeded identity, and the `app/api/*` proxy routes. Also the separate org→site events channel: the boot order of the certificate, the webhook's secret path, and what a WAKE does to open browsers. |
 | [`pages.md`](pages.md) | Every page — guest (login/register/confirm/reset) and app (chat shell + `/user` account) — what it does, its guard, and the flow it drives. |
-| [`chat-sdk.md`](chat-sdk.md) | The five SDK layers and how to USE them — including the exact ChatShell instantiation pattern and `runFlow({chatId, prompt})`. |
+| [`chat-sdk.md`](chat-sdk.md) | The five SDK layers and how to USE them — including the exact ChatShell instantiation pattern and `runFlow({chatId, prompt})`, and what Keen 15.3's SDK changes (§8). |
 | [`callbacks.md`](callbacks.md) | `onStream` vs `onSystem` vs `onStatus` vs `onRunning` vs `onWelcome` — signatures, what fires each, and what the app does with it. |
 | [`errors.md`](errors.md) | The error taxonomy: `E….` status codes and their prefix/retry contract, the SDK‑level failures (`FatalSendError`, cancel, timeouts), WebSocket close codes (1006 / 1009), and the site's own HTTP refusals (401 / 403 / 429 / 503). |
 | [`cookies.md`](cookies.md) | How request cookies reach a flow's **script nodes** — the two `cookies` shapes (names vs explicit map) and the path to `system/cookies`. |

@@ -98,7 +98,7 @@ Save this as **`Assistant.flow`** in the project's `src/flows/` folder:
 - **Fixed fields per node:** `labelNode` / `descriptionNode` are the fixed titles (Start Flow / Flow entry
   point · LLM / Use LLM processor · End Flow / Flow terminal); `dragHandle` is always
   `".drag-handle__custom"`.
-- **Handles:** Start out = **`next`**; Agent in = `in`, out = **`next_1`**; End in = `in`. Edges carry
+- **Handles:** Start out = **`next`**; Agent in = `in`, out = **`next_1`** (+ optional **`error`** Fallback and **`summary`** to a Summarizer node, whose own Out continues the flow on a due turn — see `nodes/agent-node.md` and `nodes/summarizer-node.md`); End in = `in`. Edges carry
   `"type": "step"` and the id `xy-edge__<source><sourceHandle>-<target><targetHandle>`.
 - **Start label** = one capitalized word, letters only (`Start`). The **file** is `Assistant.flow`, so the
   entry is **`Assistant-Start`**.

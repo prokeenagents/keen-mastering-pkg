@@ -1,6 +1,6 @@
 # Agent (LLM) Node
 
-**Palette name:** `LLM`  ·  **Dots:** **In** (`in`) · **Out** (`next_1`) · **Fallback** (`error`)  ·
+**Palette name:** `LLM`  ·  **Dots:** **In** (`in`) · **Out** (`next_1`) · **Fallback** (`error`) · **Summary** (`summary`)  ·
 **Settings:** three panels — **General**, **Prompt**, **LLM**
 
 **In one line:** the brain — it sends a conversation to a language model, gets the answer back, and can
@@ -21,13 +21,14 @@ result, and keep reasoning before it gives a final answer (see `../tool-calling.
 The card shows **three settings icons** (top-right), each opening a panel: **General**, **Prompt**, and
 **LLM**. Plus **Rotate**.
 
-## On the canvas — three dots
+## On the canvas — four dots
 
 | Dot (label) | Handle id | Direction | Wire it to… |
 |---|---|---|---|
 | **In** (top) | `in` | input | the previous node |
 | **Out** (bottom) | `next_1` | output | what runs after a **normal** answer (this is also where the tool loop exits to) |
 | **Fallback** (side) | `error` | output | what runs if the **LLM call fails** (see Fallback below) |
+| **Summary** (side) | `summary` | output | **optional** — the one **Summarizer node** (`summarizer-node.md`) that writes this chat's rolling summary (see *Chat memory* below). Leave it unwired for no summary. When a summary is due the node exits here instead of **Out**. |
 
 ---
 
@@ -67,7 +68,7 @@ Here you author the **conversation prompts** — a list of turns, each with a **
 
 **What the model actually receives** = your authored prompts **＋** up to **50** prior turns from the chat
 history (each becomes a user + an assistant message) **＋** the **live** latest user message, all in order,
-with adjacent same-role turns merged. (During a tool loop the current exchange's tool turns are kept in
+with adjacent same-role turns merged. (With a **Summary** output the model also gets the chat summary, and the turns are capped at 50 000 tokens — see *Chat memory*. During a tool loop the current exchange's tool turns are kept in
 full; past tool turns are dropped as noise.)
 
 ## Panel 3 — LLM Settings (model & behaviour)
@@ -88,7 +89,7 @@ The engine supports **three providers** — **`anthropic`**, **`google`**, **`op
 the `flowBuilder.aiModels` setting / a pasted `models.json`). **This list is configurable**, so check the
 panel for the live roster — but the **engine's own model registry is the authority**: a `model` name absent
 from it fails the turn with `E6101` ("Model record not found") no matter what the panel offered. At the
-time of writing the engine registry holds these 24:
+time of writing the engine registry holds 24 models; the table lists the 23 to use (the registry still carries `gemini-2.0-flash-001`, but Google has retired it and it answers 404 — don't pick it):
 
 | `company` | `model` (model_name) | Sampling | Max tokens | Reasoning knob |
 |---|---|---|---|---|
@@ -98,7 +99,7 @@ time of writing the engine registry holds these 24:
 | anthropic | `claude-sonnet-4-6` | temperature XOR top_p | 8192 (≤64000) | — (`effort` is **ignored by the engine** for this model) |
 | anthropic | `claude-sonnet-4-5` · `claude-sonnet-4-5-20250929` | temperature XOR top_p | 8192 (≤64000) | — |
 | anthropic | `claude-haiku-4-5-20251001` | temperature XOR top_p | 8192 (≤64000) | — |
-| google | `gemini-2.0-flash-001` · `gemini-2.5-flash` · `gemini-2.5-pro` · `gemini-flash-latest` | temperature + top_p | ≤65536 | — |
+| google | `gemini-2.5-flash` · `gemini-2.5-pro` · `gemini-flash-latest` | temperature + top_p | ≤65536 | — |
 | google | `gemini-3-flash-preview` | temperature + top_p | ≤65536 | `thinkingLevel`: **LOW / HIGH only** (MINIMAL is dropped → HIGH) |
 | google | `gemini-3.1-pro-preview` | temperature + top_p | ≤65536 | `thinkingLevel`: **LOW / HIGH only** (MEDIUM is dropped → HIGH) |
 | google | `gemini-3.1-flash-lite-preview` | temperature + top_p | ≤65536 | `thinkingLevel`: **LOW / HIGH only** (MINIMAL/MEDIUM are dropped → HIGH) |
@@ -133,6 +134,65 @@ every other Anthropic model (including opus-4-6 and sonnet-4-6); OpenAI reasonin
 cap); Google uses `thinkingLevel` LOW/HIGH on Gemini 3 (other values are dropped → HIGH) and a numeric
 `thinkingBudget` on Gemini 2.5. The engine applies a knob only where that provider path supports it and
 ignores it otherwise.
+
+---
+
+## Chat memory — the Summary output
+
+Without a Summary output the agent sees only the last 50 turns of the chat; everything older is forgotten.
+Wire the **Summary** dot (`summary`) to a **Summarizer node** (`summarizer-node.md`) and the platform keeps a
+**rolling summary of the chat** for you.
+
+**What the platform does** (you author the Summarizer node and its Out):
+- **The agent answers first.** The summary never delays an answer.
+- **The exit:** after a successful final answer the LLM node picks its exit. If a summary is **due** — **20
+  turns or 50 000 tokens** since the last one, counted after this answer, whichever comes first — and the Summary
+  dot is wired, it exits through **Summary**; otherwise through **Out**. A tool call, a tool-response recall or a
+  model failure never exits through Summary (a failure still uses **Fallback**, else Out).
+- **Who writes it:** the connected **Summarizer node**, as its own flow step, using its model and System prompt.
+  It never streams to the user and writes no chat history; the platform sends it the previous summary plus the
+  new turns. If it fails, the flow exits through its **Fallback** (another Summarizer — model failover) or, with
+  none wired, through its **Out**. Its **Out** is where the flow continues after a due turn.
+- **The chat stays busy** while the Summarizer runs (up to a **60-second** budget); the Chat SDK reports it with
+  `onSummarizing(true / false)`.
+- **Size:** at most **1500 tokens**. A cut or empty summary is discarded.
+- **Where it goes:** appended to the **end of the agent's System context** for the next turns. After it come the
+  last **50 turns** (capped at 50 000 tokens — this cap applies only to nodes with a Summary output), then the
+  user's prompt.
+- **Kept:** the 5 newest per chat; only the newest is used.
+- A node with **Interact with DB off** (`skip-internal-database-interactions`) keeps no history, so it never
+  summarizes.
+
+**The deploy rule:** the Summary output must connect to **exactly one Summarizer node**
+(`type: "summarizerNode"`). Two edges, or a target that is not a Summarizer node (an LLM node included), refuse
+the deploy with `Summary output must connect to exactly one Summarizer node.` (`keen-validate` and the VS Code
+Problems panel say the same). No `summary` edge at all is fine. Several LLM nodes may share **one** Summarizer.
+
+**Wire the Summarizer's Out** to where the flow should go after a due turn — normally the same place this
+node's Out leads (no rule checks it). The Summarizer has three dots (In, Fallback, Out) and no agentId; its
+model, System prompt (with the **recommended summarizer System prompt**), model advice (a fast non-reasoning
+model, reasoning none / low, `maxTokens` ≤ 1500), Fallback chains, the `.flow` JSON of the node and all the
+refusals are on its page: **`summarizer-node.md`**.
+
+**Wiring in the `.flow` file** — the LLM node's `summary` edge points to the Summarizer's `in`; the Summarizer's
+`next_1` continues the flow:
+
+```json
+[
+  {
+    "type": "step",
+    "source": "agentNode_kM6oI3DsNdH3", "sourceHandle": "summary",
+    "target": "summarizerNode_Qw3Er5Ty7Ui9", "targetHandle": "in",
+    "id": "xy-edge__agentNode_kM6oI3DsNdH3summary-summarizerNode_Qw3Er5Ty7Ui9in"
+  },
+  {
+    "type": "step",
+    "source": "summarizerNode_Qw3Er5Ty7Ui9", "sourceHandle": "next_1",
+    "target": "endNode_Zx8Cv1Bn4Mq2", "targetHandle": "in",
+    "id": "xy-edge__summarizerNode_Qw3Er5Ty7Ui9next_1-endNode_Zx8Cv1Bn4Mq2in"
+  }
+]
+```
 
 ---
 
@@ -252,7 +312,8 @@ With **Use tools** turned off, `specialRules` carries the rule:
 
 ### Wiring (edges)
 
-**In** from upstream; **Out** (`next_1`) for the answer; **Fallback** (`error`) for a provider failure.
+**In** from upstream; **Out** (`next_1`) for the answer; **Fallback** (`error`) for a provider failure;
+**Summary** (`summary`, optional) to the one Summarizer node (`summarizer-node.md`).
 Edges carry `"type": "step"` + `{ id, source, sourceHandle, target, targetHandle }`.
 
 ## ⚠️ Watch out for
@@ -263,6 +324,7 @@ Edges carry `"type": "step"` + `{ id, source, sourceHandle, target, targetHandle
   engine doesn't add them.
 - **Fallback = a provider failure or a broken node configuration** (`E6101` / `E6002`), and only if wired
   — a bad `<SYSTEM CALL>` re-loops the agent, and an empty/refusal answer is a normal `Out`.
+- **Summary output → exactly one Summarizer node**, or the deploy is refused (`Summary output must connect to exactly one Summarizer node.`). An LLM node is not a valid target. Use a fast non-reasoning model in it.
 - **"Use tools" OFF disables tool calls**; **"Interact with DB" OFF** makes the turn stateless (no history).
 
 ## ⏱ Performance

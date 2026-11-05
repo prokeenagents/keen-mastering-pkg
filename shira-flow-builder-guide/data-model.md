@@ -121,7 +121,7 @@ everywhere `${…}` is interpolated. The rules are strict:
 - **What it is:** the running conversation for the chat — **two** documents per run: a **prompts** store
   (user/trigger prompts) and a **responses** store (agent responses). Each is `{ agentId: { channel:
   [newest first, …] } }`. The default **channel** is `'root'`; channels let you run parallel sub-conversations.
-- **Caps:** 8 MB per entry, 200 entries per channel-lane, TTL 60 s.
+- **Caps:** 8 MB per entry, 200 entries per channel-lane, **8 MB written per run in total** (a run over it writes nothing and takes the Error edge), TTL 60 s.
 - **Seeded:** at run start the user's message is written to the **prompts** store under the agent + `'root'`
   with `role:'user', agentChat:true` — that's the trigger an **Agent** node picks up.
 - **Who touches it:** the **Agent** node (reads its trigger from the **prompts** store; always mirrors its

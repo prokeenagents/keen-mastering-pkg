@@ -47,7 +47,9 @@ routing keys; everything else passes through unchanged:
 | Flow Pointer | `next` (into a Parallel Flows `wait`) | — | `next` → `next_1` |
 | Condition | `true`, `false` | `in` | `true` → `next_1`, `false` → `next_2` |
 | Loop | `out` (body), `next_1` (Finish) | `in`, `next_2` (Next — the body's return) | `out` → `next_2` |
-| Agent (LLM) / Script | `next_1`, `error` | `in` | — |
+| Agent (LLM) | `next_1`, `error`, `summary` (optional — to exactly one Summarizer node) | `in` | — |
+| Summarizer | `next_1` (Out), `error` (Fallback — only to another Summarizer's `in`) | `in` (merge; only from an Agent's `summary` or a Summarizer's `error`) | — |
+| Script | `next_1`, `error` | `in` | — |
 | Assignment / Run Flow / Join / Parallel Context | `next_1` | `in` | — |
 | Parallel Flows | `next_1` | `in`, `wait` | — |
 | End / Jump Flow | — | `in` | — |

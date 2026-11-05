@@ -1,6 +1,15 @@
 import type ChatAPI from './index';
 import { CHAT_SETTINGS } from './settings';
-import { FatalSendError, generateRequestId, generateUUID, resolveRequestCookies, sleep } from './utils';
+import {
+    CONNECTION_LOST_TEXT,
+    ConnectionLostError,
+    FatalSendError,
+    generateRequestId,
+    generateUUID,
+    resolveRequestCookies,
+    retryAfterHintMs,
+    retryBackoffMs
+} from './utils';
 
 type NodeTask = App.Chat.NodeTask;
 type FlowTaskBundle = App.Chat.FlowTaskBundle;
@@ -9,6 +18,7 @@ type RunFlowInput = App.Chat.RunFlowInput;
 type NodeTaskRequest = App.Chat.NodeTaskRequest;
 type FlowUpdateHandler = App.Chat.FlowUpdateHandler;
 type RunningHandler = App.Chat.RunningHandler;
+type SummarizingHandler = App.Chat.SummarizingHandler;
 type Unsubscribe = App.Chat.Unsubscribe;
 
 /**
@@ -56,8 +66,29 @@ export default class TaskQueue {
     private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
     private running = false;
 
+    /**
+     * The run state. `lost` = the connection can no longer drive this
+     * flow (ConnectionLostError); `stopRun` settles run() at once on a cancel
+     * or a loss; `wakers` cut short every retry pause; `visitIds` = the
+     * requestIds this run awaits (its node visits); `startCid` = the cid the run
+     * frame carries; `started` = the run frame got its reply.
+     */
+    private lost: ConnectionLostError | null = null;
+    private stopRun: ((err: Error) => void) | null = null;
+    private readonly wakers = new Set<() => void>();
+    private readonly visitIds = new Set<string>();
+    private startCid: string | null = null;
+    private started = false;
+    private restartStart = false;
+    private runUser: string | null = null;
+    private unwinding: Promise<unknown> | null = null;
+
     private readonly updateHandlers = new Set<FlowUpdateHandler>();
     private readonly runningHandlers = new Set<RunningHandler>();
+    private readonly summarizingHandlers = new Set<SummarizingHandler>();
+    /** Node tasks of kind `summarizerNode` in flight (the chat is being compressed while > 0). */
+    private summarizerTasks = 0;
+    private summarizing = false;
 
     constructor(private readonly chat: ChatAPI) {}
 
@@ -74,12 +105,32 @@ export default class TaskQueue {
      * round trip.
      */
     async run(input: RunFlowInput): Promise<ReadonlyMap<string, FlowTaskBundle>> {
-        if (this.bundles.size > 0) {
+        if (this.bundles.size > 0 || this.running) {
             throw new Error('TaskQueue already running — call clear() or cancel() first');
         }
 
+        /**
+         * A cancelled / lost run settles at once while its node loops unwind in
+         * the background (each stops at its next await: its waiter is rejected
+         * and its pause is cut short). Let that finish before a new run resets
+         * the shared flags.
+         */
+        if (this.unwinding) {
+            const previous = this.unwinding;
+            let timer: ReturnType<typeof setTimeout> | undefined;
+
+            await Promise.race([previous, new Promise<void>((resolve) => (timer = setTimeout(resolve, 2 * CHAT_SETTINGS.RETRY_DELAY_MS)))]);
+            clearTimeout(timer);
+            this.unwinding = null;
+        }
+
         this.cancelled = false;
+        this.lost = null;
+        this.started = false;
+        this.restartStart = false;
         this.rootCorrelationId = null;
+        this.visitIds.clear();
+        this.runUser = input.userId ?? this.chat.userId ?? null;
 
         /**
          * correlationId is connection-scoped — relay assigns it via a
@@ -94,6 +145,8 @@ export default class TaskQueue {
             correlationId = generateRequestId();
             this.chat.setCorrelationID(correlationId);
         }
+
+        this.startCid = correlationId;
 
         /**
          * Start the heartbeat as soon as the cid is known and stop it
@@ -111,14 +164,30 @@ export default class TaskQueue {
         this.setRunning(true);
         this.startHeartbeat();
 
+        /**
+         * cancel() and a lost connection settle run() AT ONCE through `stop`
+         * ("the run rejects TaskQueue cancelled at once"), even
+         * while the socket is away and no reply can come.
+         */
+        const stop = new Promise<never>((_, reject) => {
+            this.stopRun = reject;
+        });
+        const body = this.runBody(input, correlationId);
+
+        stop.catch(() => undefined);
+        this.unwinding = body.then(
+            () => undefined,
+            () => undefined
+        );
+
         try {
             /**
              * Single failure-cleanup boundary for the whole flow.
              *
              * Any throw — initial-run transport exhaustion, initial
-             * waitFor timeout, non-success initial envelope, per-node
-             * max-retries-exceeded, terminal node error, parallel
-             * fan-out failure — funnels through one catch that:
+             * waitFor timeout, non-success initial envelope, terminal
+             * node error, parallel fan-out failure — funnels through one
+             * catch that:
              *
              *   1. Fires sendCancel() so FlowCancelMgr wipes every
              *      server-side entry under the cid (dict, session,
@@ -129,102 +198,143 @@ export default class TaskQueue {
              *
              * Skipped when the user already triggered cancel() — that
              * path fires sendCancel itself, and double-firing buys
-             * nothing.
+             * nothing — and for a ConnectionLostError: the cid is no
+             * longer attached to this socket (gone, taken over, or an
+             * old relay that already cancelled it).
              */
-            try {
-                const payload: InitialRunPayload = {
-                    userContext: {
-                        userId: input.userId ?? this.chat.userId,
-                        email: input.email ?? this.chat.email,
-                        accessToken: this.chat.accessToken
-                    },
-                    rootAgentContext: {
-                        agentId: input.agentId ?? this.chat.agentID,
-                        prompt: input.prompt
-                    },
-                    chatContext: {
-                        chatId: input.chatId,
-                        projectId: input.projectId ?? this.chat.projectID
-                    },
-                    flowContext: {
-                        correlationId,
-                        sessionId: generateRequestId(),
-                        requestId: generateRequestId()
-                    },
-                    /**
-                     * Request-scoped cookies the consumer carried in (e.g. a
-                     * Google-Connect token). Read from document.cookie at
-                     * send time and forwarded ONLY on the initial run — the
-                     * engine writes them to cookieStorage:${cid}_${sid} once;
-                     * script nodes read them via system/cookies. (Browser JS
-                     * can't see HttpOnly cookies — those won't appear here.)
-                     */
-                    requestContext: {
-                        cookies: resolveRequestCookies(this.chat.cookieConfig)
-                    }
-                };
-
-                const requestId = await this.chat.send(payload);
-                const envelope = await this.chat.waitFor(requestId);
-
-                if (this.cancelled) {
-                    throw new Error('TaskQueue cancelled');
-                }
-
-                if (!envelope.success) {
-                    throw new Error(envelope.message ?? envelope.code);
-                }
-
-                const root = this.normaliseInboundBundle(envelope.data);
-
-                /**
-                 * Defensive: spec says "if the server returns something
-                 * that does not have nodeTasks, finish the chain
-                 * operation."
-                 */
-                if (!root?.nodeTasks || root.nodeTasks.length === 0) {
-                    if (root?.flowTask) {
-                        root.flowTask.flowContext.completed = true;
-                        this.registerBundle(root);
-                    }
-
-                    return this.snapshotAndClear();
-                }
-
-                this.rootCorrelationId = root.flowTask.flowContext.correlationId;
-                this.registerBundle(root);
-
-                /**
-                 * Drain until every bundle in the map is completed. Each
-                 * iteration drains every still-not-completed bundle in
-                 * parallel; freshly registered bundles (from parallel
-                 * normalisation) get picked up on the next pass.
-                 */
-                while (!this.cancelled && this.hasIncomplete()) {
-                    const incompletes = Array.from(this.bundles.values()).filter(
-                        (b) => !b.flowTask.flowContext.completed
-                    );
-
-                    await Promise.all(incompletes.map((b) => this.drainBundle(b)));
-                }
-
-                if (this.cancelled) {
-                    throw new Error('TaskQueue cancelled');
-                }
-
-                return this.snapshotAndClear();
-            } catch (err) {
-                if (!this.cancelled) {
-                    this.chat.sendCancel();
-                }
-
-                this.clear();
-                throw err;
+            return await Promise.race([body, stop]);
+        } catch (err) {
+            if (!this.cancelled && !(err instanceof ConnectionLostError)) {
+                this.chat.sendCancel(this.rootCorrelationId ?? this.startCid ?? undefined);
             }
+
+            this.endRun(err instanceof Error ? err : new Error(String(err)));
+            this.clear();
+            throw err;
         } finally {
+            this.stopRun = null;
+            this.forgetVisits();
             this.stopHeartbeat();
+            this.summarizerTasks = 0;
+            this.setSummarizing(false);
             this.setRunning(false);
         }
+    }
+
+    /** The flow itself: the run frame, then the drain until every bundle completes. */
+    private async runBody(input: RunFlowInput, correlationId: string): Promise<ReadonlyMap<string, FlowTaskBundle>> {
+        const payload: InitialRunPayload = {
+            userContext: {
+                userId: input.userId ?? this.chat.userId,
+                email: input.email ?? this.chat.email,
+                accessToken: this.chat.accessToken
+            },
+            rootAgentContext: {
+                agentId: input.agentId ?? this.chat.agentID,
+                prompt: input.prompt
+            },
+            chatContext: {
+                chatId: input.chatId,
+                projectId: input.projectId ?? this.chat.projectID
+            },
+            flowContext: {
+                correlationId,
+                sessionId: generateRequestId(),
+                requestId: generateRequestId()
+            },
+            /**
+             * Request-scoped cookies the consumer carried in (e.g. a
+             * Google-Connect token). Read from document.cookie at
+             * send time and forwarded ONLY on the initial run — the
+             * engine writes them to cookieStorage:${cid}_${sid} once;
+             * script nodes read them via system/cookies. (Browser JS
+             * can't see HttpOnly cookies — those won't appear here.)
+             */
+            requestContext: {
+                cookies: resolveRequestCookies(this.chat.cookieConfig)
+            }
+        };
+
+        const envelope = await this.sendRunFrame(payload);
+
+        this.started = true;
+
+        const root = this.normaliseInboundBundle(envelope.data);
+
+        /**
+         * Defensive: spec says "if the server returns something
+         * that does not have nodeTasks, finish the chain
+         * operation."
+         */
+        if (!root?.nodeTasks || root.nodeTasks.length === 0) {
+            if (root?.flowTask) {
+                root.flowTask.flowContext.completed = true;
+                this.registerBundle(root);
+            }
+
+            return this.snapshotAndClear();
+        }
+
+        this.rootCorrelationId = root.flowTask.flowContext.correlationId;
+        this.registerBundle(root);
+
+        /**
+         * Drain until every bundle in the map is completed. Each
+         * iteration drains every still-not-completed bundle in
+         * parallel; freshly registered bundles (from parallel
+         * normalisation) get picked up on the next pass.
+         */
+        while (!this.cancelled && this.hasIncomplete()) {
+            if (this.lost) {
+                throw this.lost;
+            }
+
+            const incompletes = Array.from(this.bundles.values()).filter(
+                (b) => !b.flowTask.flowContext.completed
+            );
+
+            await Promise.all(incompletes.map((b) => this.drainBundle(b)));
+        }
+
+        if (this.lost) {
+            throw this.lost;
+        }
+
+        if (this.cancelled) {
+            throw new Error('TaskQueue cancelled');
+        }
+
+        return this.snapshotAndClear();
+    }
+
+    /**
+     * The connection can no longer drive the running flow: the
+     * relay answered `gone` / `protocol` to the resume, a token refusal's
+     * refresh answered null, close 4409 (taken over), or an old relay dropped
+     * it. run() rejects with `err` at once, no cancel is sent.
+     *
+     * Exception: a `gone` / `protocol` refusal while the only
+     * frame on the old cid was the run frame and no reply came — the flow had
+     * not started, so the start is re-sent on the NEW cid as a start attempt.
+     */
+    connectionLost(err: ConnectionLostError): void {
+        if (!this.running || this.cancelled || this.lost) {
+            return;
+        }
+
+        if (!this.started && err.restartable) {
+            this.restartStart = true;
+            this.chat.responseApi?.failAll(err, this.visitIds);
+            this.wake();
+            return;
+        }
+
+        this.endRun(err);
+    }
+
+    /** The userId of the running flow (the `resume` frame carries it), or null. */
+    runUserId(): string | null {
+        return this.running ? this.runUser : null;
     }
 
     /**
@@ -233,10 +343,21 @@ export default class TaskQueue {
      * correlationId) and wipes local state. Safe to call when idle.
      */
     cancel(): void {
+        const cid = this.rootCorrelationId ?? (this.running ? this.startCid : null);
+        const wasRunning = this.running;
+
         this.cancelled = true;
 
-        if (this.rootCorrelationId) {
-            this.chat.sendCancel(this.rootCorrelationId);
+        /**
+         * sendCancel defers the frame when the socket is away or not resumed
+         * yet: the next socket resumes the cid, then cancels.
+         */
+        if (cid) {
+            this.chat.sendCancel(cid);
+        }
+
+        if (wasRunning) {
+            this.endRun(new Error('TaskQueue cancelled'));
         }
 
         this.clear();
@@ -251,6 +372,59 @@ export default class TaskQueue {
         this.bundles.clear();
         this.rootCorrelationId = null;
         this.emitUpdate();
+    }
+
+    /**
+     * Settle the running flow with `err` now: run() rejects, every waiter of
+     * this run is rejected, every retry pause wakes up, and the frames this run
+     * still awaits leave the re-send registry. A ConnectionLostError is kept as
+     * `lost`, so each node loop re-throws it at its next boundary.
+     */
+    private endRun(err: Error): void {
+        if (err instanceof ConnectionLostError) {
+            this.lost = this.lost ?? err;
+        } else {
+            // Any other end (cancel, a terminal error): the remaining node loops stop quietly.
+            this.cancelled = true;
+        }
+
+        const stop = this.stopRun;
+
+        this.stopRun = null;
+        this.chat.responseApi?.failAll(err, this.visitIds);
+        this.forgetVisits();
+        this.wake();
+        stop?.(err);
+    }
+
+    private forgetVisits(): void {
+        this.chat.sendRequestApi?.forget(this.visitIds);
+        this.visitIds.clear();
+    }
+
+    /** True once this run must stop — its node loops and transport retries check it. */
+    private aborted(): boolean {
+        return this.cancelled || this.lost !== null;
+    }
+
+    /** A retry pause that a cancel or a lost connection cuts short. */
+    private pause(ms: number): Promise<void> {
+        return new Promise((resolve) => {
+            const waker = (): void => {
+                clearTimeout(timer);
+                this.wakers.delete(waker);
+                resolve();
+            };
+            const timer = setTimeout(waker, ms);
+
+            this.wakers.add(waker);
+        });
+    }
+
+    private wake(): void {
+        for (const waker of Array.from(this.wakers)) {
+            waker();
+        }
     }
 
     /**
@@ -284,6 +458,19 @@ export default class TaskQueue {
 
         return () => {
             this.runningHandlers.delete(handler);
+        };
+    }
+
+    /**
+     * Subscribe to the chat-compression transitions. Fires `true` when a node task of kind
+     * `summarizerNode` is dispatched, `false` when it settles (reply, error, cancel) or the flow ends.
+     * Idempotent: re-emitting the same value is a no-op.
+     */
+    onSummarizing(handler: SummarizingHandler): Unsubscribe {
+        this.summarizingHandlers.add(handler);
+
+        return () => {
+            this.summarizingHandlers.delete(handler);
         };
     }
 
@@ -373,12 +560,144 @@ export default class TaskQueue {
                 return;
             }
 
+            /**
+             * A `summarizerNode` task is the chat-memory step: onSummarizing(true) while it is in
+             * flight, false when it settles — its reply, an error, a cancel. Counted, so parallel bundles
+             * cannot flip it off early; run()'s finally resets it so it is never left stuck at true.
+             */
+            if (node.nodeContext.kind === 'summarizerNode') {
+                this.summarizerTasks += 1;
+                this.setSummarizing(true);
+
+                try {
+                    await this.runRegularNode(bundle, node);
+                } finally {
+                    this.summarizerTasks = Math.max(0, this.summarizerTasks - 1);
+
+                    if (this.summarizerTasks === 0) {
+                        this.setSummarizing(false);
+                    }
+                }
+
+                return;
+            }
+
             await this.runRegularNode(bundle, node);
         } finally {
             if (!node.ready) {
                 node.inProgress = false;
                 this.emitUpdate();
             }
+        }
+    }
+
+    /**
+     * Send the RUN FRAME (the user's first prompt) and wait for its reply (Keen
+     * 15.3 decisions 42 + 44). The run frame is the ONLY thing that may be
+     * refused: until it is accepted the flow has not started. A capacity refusal
+     * (E4xxx — the relay answers E4001 for "no engine in the queue group" too)
+     * is retried INITIAL_MAX_RETRIES times in all, a fixed 1 s apart, each
+     * attempt the same frame and requestId (nothing ran). After the
+     * last refusal — or on any other non-success — it throws the envelope's
+     * message: a clean, terminal "busy" for the caller ("try again in a minute").
+     * Once the frame is accepted, every node of the flow (its startNode and every
+     * `initial: true` node included) retries without a limit (`runRegularNode`).
+     */
+    private async sendRunFrame(payload: InitialRunPayload): Promise<App.Chat.Envelope> {
+        /**
+         * ONE requestId for the run frame's attempts (the visit id):
+         * a re-send after a resume, or after a settled E4 refusal, carries it, so
+         * the relay answers it from its buffer or joins the dispatch in flight.
+         */
+        let requestId = generateRequestId();
+
+        /**
+         * A socket that drops BEFORE the run frame went out reconnects on a new
+         * cid (nothing to resume). The frame still waiting in the transport retry
+         * holds this same payload object, so it follows the new cid.
+         */
+        const stopFollowing = this.chat.onWelcome?.(({ correlationID }) => {
+            if (!this.started && !this.chat.sendRequestApi?.isAwaited(requestId) && payload.flowContext) {
+                payload.flowContext.correlationId = correlationID;
+                this.startCid = correlationID;
+            }
+        });
+
+        try {
+            return await this.sendRunFrameAttempts(payload, () => requestId, (id) => (requestId = id));
+        } finally {
+            stopFollowing?.();
+        }
+    }
+
+    private async sendRunFrameAttempts(
+        payload: InitialRunPayload,
+        currentId: () => string,
+        setId: (id: string) => void
+    ): Promise<App.Chat.Envelope> {
+        let attempt = 0;
+        let requestId = currentId();
+
+        while (true) {
+            attempt += 1;
+
+            /**
+             * The old cid is gone and nothing had started: re-send
+             * the start on the connection's NEW cid, as a fresh start attempt.
+             */
+            if (this.restartStart) {
+                this.restartStart = false;
+                this.forgetVisits();
+                const cid = this.chat.getCorrelationID();
+
+                if (cid && payload.flowContext) {
+                    payload.flowContext.correlationId = cid;
+                    this.startCid = cid;
+                }
+                requestId = generateRequestId();
+                setId(requestId);
+            }
+
+            if (payload.userContext) {
+                payload.userContext.accessToken = this.chat.accessToken;
+            }
+            this.visitIds.add(requestId);
+
+            let envelope: App.Chat.Envelope;
+
+            try {
+                const sentId = await this.chat.send(payload, { requestId, isAborted: () => this.aborted() });
+
+                envelope = await this.chat.waitFor(sentId);
+            } catch (err) {
+                if (this.cancelled) {
+                    throw new Error('TaskQueue cancelled');
+                }
+                if (this.lost) {
+                    throw this.lost;
+                }
+                if (err instanceof ConnectionLostError && err.restartable && attempt < CHAT_SETTINGS.INITIAL_MAX_RETRIES) {
+                    await this.pause(CHAT_SETTINGS.RETRY_DELAY_MS);
+                    continue;
+                }
+                throw err;
+            }
+
+            if (this.cancelled) {
+                throw new Error('TaskQueue cancelled');
+            }
+
+            if (envelope.success) {
+                this.visitIds.delete(requestId);
+                return envelope;
+            }
+
+            if (typeof envelope.code === 'string' && envelope.code.startsWith('E4') && attempt < CHAT_SETTINGS.INITIAL_MAX_RETRIES) {
+                await this.pause(CHAT_SETTINGS.RETRY_DELAY_MS);
+                continue;
+            }
+
+            throw new Error(envelope.message ?? envelope.code);
         }
     }
 
@@ -492,18 +811,38 @@ export default class TaskQueue {
         /**
          * Two layers of retry:
          *   1. Transport retry — handled inside SendRequest (socket not
-         *      ready → 1s backoff, max 10 for initial nodes, Infinity
-         *      for continuations).
+         *      ready → 1s backoff, Infinity for every node).
          *   2. Response retry — THIS loop. When the server replies with
          *      a non-success envelope whose code is not terminal
-         *      (E2x, E3x, E8x), we wait 1s and re-issue the whole
-         *      send + waitFor cycle. Max attempts mirrors the
-         *      transport policy: bounded for initial, infinite for
-         *      continuations.
+         *      (E2x, E3x, E8x), we wait and re-issue the whole
+         *      send + waitFor cycle, without a limit: a node belongs to
+         *      a flow that has STARTED (its run frame was accepted), and
+         *      a started flow is always finished — only the user's
+         *      cancel ends it. That holds for the root
+         *      flow's startNode and for every `initial: true` node of a
+         *      child flow / parallelIn / clone / jump too. The pause
+         *      backs off exponentially with full jitter,
+         *      1 → 2 → 4 → 8 → 10 s caps, or an E4 refusal's
+         *      `retryAfterMs` (capped at 10 s) — see `retryDelayMs`. The
+         *      count is per node, so it resets once the node succeeds.
+         *      Only the run frame is bounded (`sendRunFrame`).
          */
-        const maxResponseRetries = node.nodeContext.initial ? CHAT_SETTINGS.INITIAL_MAX_RETRIES : Number.POSITIVE_INFINITY;
+        const maxResponseRetries = Number.POSITIVE_INFINITY;
         let attempt = 0;
         let lastError: string | null = null;
+        /**
+         * The node-visit id: minted ONCE for this visit and
+         * carried by every retry and every re-send after a resume, so the relay
+         * recognises a re-send of the same node (reply buffer / join) instead of
+         * running it again.
+         */
+        const visitId = generateRequestId();
+        /** An E3002 reply is refreshed through onAuthExpired once per visit (§6.3). */
+        let refreshed = false;
+        /** Failures in a row for the backoff (an E3002 refresh is not one). */
+        let failures = 0;
+
+        this.visitIds.add(visitId);
 
         while (attempt < maxResponseRetries) {
             attempt += 1;
@@ -511,6 +850,13 @@ export default class TaskQueue {
             if (this.cancelled) {
                 return;
             }
+
+            if (this.lost) {
+                throw this.lost;
+            }
+
+            // The relay verifies the token on every frame: stamp the current one.
+            payload.userContext = { ...payload.userContext, accessToken: this.chat.accessToken };
 
             /**
              * Send + waitFor live inside the same try so transport
@@ -523,7 +869,9 @@ export default class TaskQueue {
             let envelope: App.Chat.Envelope;
             try {
                 const requestId = await this.chat.sendNodeTask(payload, {
-                    maxRetries: node.nodeContext.initial ? CHAT_SETTINGS.INITIAL_MAX_RETRIES : Number.POSITIVE_INFINITY
+                    maxRetries: Number.POSITIVE_INFINITY,
+                    requestId: visitId,
+                    isAborted: () => this.aborted()
                 });
 
                 if (this.cancelled) {
@@ -534,6 +882,17 @@ export default class TaskQueue {
             } catch (err) {
                 if (this.cancelled) {
                     return;
+                }
+
+                /**
+                 * The connection can no longer drive this flow:
+                 * fatal, like FatalSendError — and run() sends no cancel for it.
+                 */
+                if (this.lost) {
+                    throw this.lost;
+                }
+                if (err instanceof ConnectionLostError) {
+                    throw err;
                 }
 
                 /**
@@ -548,9 +907,10 @@ export default class TaskQueue {
                 }
 
                 lastError = err instanceof Error ? err.message : String(err);
+                failures += 1;
 
                 if (attempt < maxResponseRetries) {
-                    await sleep(CHAT_SETTINGS.RETRY_DELAY_MS);
+                    await this.pause(this.retryDelayMs(failures, null));
                     continue;
                 }
 
@@ -561,11 +921,16 @@ export default class TaskQueue {
                 return;
             }
 
+            if (this.lost) {
+                throw this.lost;
+            }
+
             // Stamp THIS node with its own response so the harness inspector
             // can show the exact per-node request/response on click.
             node.response = envelope;
 
             if (envelope.success) {
+                this.visitIds.delete(visitId);
                 /**
                  * End-of-flow signal: the engine's EndNode replies with
                  *   { final: true, flowContext: { flowId, correlationId, sessionId, requestId } }
@@ -676,18 +1041,68 @@ export default class TaskQueue {
              * (bad input, auth failure, explicit cancel) we surface
              * it. Anything else we treat as transient and retry.
              */
+            /**
+             * E3002 (an expired / invalid token) on a node:
+             * with onAuthExpired, refresh ONCE and retry the SAME visit id; a null
+             * refresh is terminal (`Invalid token`). A refresh that throws is
+             * retried after the backoff — a started flow is not ended by a
+             * transient refresh failure. Without the hook E3002 stays terminal,
+             * as does E3101.
+             */
+            if (envelope.code === 'E3002' && !refreshed && this.chat.hasAuthHook?.() === true) {
+                let token: string | null;
+
+                try {
+                    token = await this.chat.refreshAccessToken();
+                } catch (err) {
+                    if (this.cancelled) {
+                        return;
+                    }
+                    lastError = `E3002 refresh failed: ${err instanceof Error ? err.message : String(err)}`;
+                    failures += 1;
+                    await this.pause(this.retryDelayMs(failures, null));
+                    continue;
+                }
+
+                if (this.cancelled) {
+                    return;
+                }
+
+                if (typeof token !== 'string' || token.length === 0) {
+                    throw new Error(CONNECTION_LOST_TEXT.INVALID_TOKEN);
+                }
+
+                refreshed = true;
+                continue;
+            }
+
             if (this.isTerminalErrorCode(envelope.code)) {
                 throw new Error(envelope.message ?? envelope.code);
             }
 
             lastError = `${envelope.code}: ${envelope.message ?? ''}`;
+            failures += 1;
 
             if (attempt < maxResponseRetries) {
-                await sleep(CHAT_SETTINGS.RETRY_DELAY_MS);
+                await this.pause(this.retryDelayMs(failures, envelope));
             }
         }
 
         throw new Error(`max response retries exceeded for node ${node.nodeContext.id}; last error: ${lastError ?? 'unknown'}`);
+    }
+
+    /**
+     * The pause before a node's next response retry —
+     * every node, `initial: true` ones included: retryBackoffMs, full jitter in
+     * [0, min(10 s, 1 s × 2^(n−1))] for the n-th failure in a row, or the
+     * refusal's `retryAfterMs` hint capped at 10 s.
+     */
+    private retryDelayMs(failures: number, envelope: unknown): number {
+        return retryBackoffMs(failures, {
+            baseMs: CHAT_SETTINGS.RETRY_BASE_DELAY_MS,
+            maxMs: CHAT_SETTINGS.RETRY_MAX_DELAY_MS,
+            hintMs: retryAfterHintMs(envelope)
+        });
     }
 
     /**
@@ -1335,6 +1750,19 @@ export default class TaskQueue {
         this.running = value;
 
         for (const handler of this.runningHandlers) {
+            handler(value);
+        }
+    }
+
+    /** Flip the summarizing flag and fan out to onSummarizing subscribers (idempotent). */
+    private setSummarizing(value: boolean): void {
+        if (this.summarizing === value) {
+            return;
+        }
+
+        this.summarizing = value;
+
+        for (const handler of this.summarizingHandlers) {
             handler(value);
         }
     }

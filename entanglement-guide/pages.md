@@ -205,7 +205,10 @@ A **server component** in the authenticated area (a signed‑out visitor is boun
 to `/login` first — the redeem needs the live session). It opens the sealed hash
 and redeems through the connector (two‑token: the session cookie + the app token),
 then shows "Password changed" or the invalid/expired panel, each with a link back
-to the account page.
+to the account page. On Keen 15.3 a changed password revokes every session of the
+consumer, this one included: the next chat frame or refresh is refused and the
+user signs in again with the new password (the same holds after a
+`/set-password/[hash]` reset).
 
 ---
 

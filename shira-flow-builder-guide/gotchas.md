@@ -142,6 +142,11 @@ Ordered by how much pain they cause, deepest first.
 
 ---
 
+### A14. The Summary output must reach exactly one Summarizer node (and its Out must go somewhere sensible)
+- **Symptom:** the deploy is refused with `Summary output must connect to exactly one Summarizer node.` (and `keen-validate` / the VS Code Problems panel show the same). Related refusals: `A Summarizer node needs a model.`, `A Summarizer node's In takes only a Summary output or a Summarizer's Fallback.`, `A Summarizer node's Fallback connects only to a Summarizer node.` and `Summarizer Fallbacks must not form a loop.` Or, with no refusal: after a due turn the flow ends early / goes somewhere else than a normal turn.
+- **Cause:** an Agent node's **Summary** (`summary`) dot has two or more edges, or its edge ends on anything but a **Summarizer** node (an LLM node is not valid), or the Summarizer has no company + model, or something other than a Summary output / a Summarizer's Fallback leads into its In, or its Fallback leads to a non-Summarizer or two places or round in a circle. The early end: a Summarizer is a real flow step — on a due turn the flow continues from **its Out**, not from the LLM node's Out, and nothing checks that the two lead the same way.
+- **Fix:** one edge, to one Summarizer node (`nodes/summarizer-node.md`) with a model and the System prompt; or no `summary` edge at all. Wire the Summarizer's **Out** to the same continuation as the LLM node's Out (or share a Jump Flow). For a model failover chain Summarizers through **Fallback**. Use a fast non-reasoning model (reasoning tokens eat the 1500-token cap and a cut summary is discarded), and keep **Interact with DB** on for the source node (without history there is nothing to summarize). The chat stays busy while the Summarizer runs (`onSummarizing`). See `nodes/agent-node.md` → *Chat memory*.
+
 ## B. Data & placeholders
 
 ### B1. `${...}` only understands `dictionary` and `session` — nothing else

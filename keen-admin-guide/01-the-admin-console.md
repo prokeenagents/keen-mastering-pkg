@@ -38,8 +38,9 @@ name, or send yourself a password-reset mail with **Send Reset Mail**) and **Log
 - **Delete is two-step** — a click to arm it, a second to confirm. Deletes can cascade (a space takes
   its agents; deleting a bound client, certificate or contract unbinds it from its Api Key — a bound
   **webhook** can't be deleted at all until you unbind it on the key). The page tells you.
-- **Some secrets are shown once** — a new API key, a client secret, an MCP account's secret. Copy
-  them the moment they appear; they cannot be recovered, only rotated.
+- **Some secrets are shown once** — a new API key, a client secret, an MCP account's secret, a new
+  certificate's secret key. Copy them the moment they appear; they cannot be recovered, only rotated
+  (a certificate's secret key is replaced on its page).
 - **Copy buttons** — IDs and tokens have a one-click copy (Space ID, Agent ID, Api Key ID, MCP
   Account ID, deployment token).
 
@@ -60,7 +61,8 @@ So if a teammate says "I don't have that menu" or "I can't see the Save/Delete/R
    automatically** (they see *"Your access changed — please sign in again."* on the login page).
    They sign in again and the new permissions are in effect. No manual refresh needed — and no way
    to keep the old session. The same happens when you change one person's role on their account.
-   (An MCP account picks the change up at its next token refresh instead.)
+   (An MCP account's session ends too: within about 10 minutes it signs in again, with the new
+   permissions.)
 
 The **owner**, **admin**, **developer** and **default** roles are **protected** and can't be
 deleted; owner/admin/default can't be edited at all, and developer keeps its name (only its
@@ -75,24 +77,25 @@ through a one-time activation screen — see `02-organization.md`.
 
 Your session is **time-limited on purpose** — it's a security safeguard. While you're active,
 navigation quietly keeps you signed in; but after a stretch of **inactivity** a small panel titled
-**Session Expired** appears in place (with a blurred backdrop): your email is already filled in and
-locked, you type your password and press **Sign In** to carry on. You **don't lose your spot** — you
-continue exactly where you were.
+**Session locked** appears in place (with a blurred backdrop, and it can't be closed): your email is
+already filled in and locked, you type your password and press **Sign In** to carry on. You **don't
+lose your spot** — you continue exactly where you were.
 
 - **Today's real numbers (every environment):** the sign-in itself is refreshed silently as long as
-  you keep using the console; the prompt appears after about **11 minutes of doing nothing** (a
-  1-minute access window plus a 10-minute idle grace). If you stay away for **2 days**, the session is
-  over for good and you land on the login page. There is no separate "long production session"
-  today — making production sessions longer is a configuration decision for the engineering team,
-  not something you can set in the console.
+  you keep using the console; the prompt appears after about **20 minutes of doing nothing** (a
+  10-minute access window plus a 10-minute idle grace). If you stay away for more than **2 days** with
+  the page open, the sign-in itself has run out: the same panel appears titled **Session expired**, and your
+  password continues in place just the same (a page you open fresh after that goes to the login
+  page). There is no separate "long production session" today — making production sessions longer
+  is a configuration decision for the engineering team, not something you can set in the console.
 - **Can you stop it?** **No — and you shouldn't want to.** It's a platform security behavior, not a
   setting in the admin console; there's no toggle to disable it. Staying active keeps you signed in;
   it's the idle gaps that trigger the prompt.
-- **Three things end the session instead of unlocking it** — you'll land on the **login page**:
-  typing a **wrong password three times** in the prompt; **reloading or navigating** while the prompt
-  is showing (don't press F5 — just enter the password); and being away longer than the 2-day
-  window. The prompt's small **Go to sign in** link does the same on purpose (use it if a *different*
-  person needs to sign in). In every case just log in again; nothing is lost.
+- **Two things end the session instead of unlocking it** — you'll land on the **login page**:
+  typing a **wrong password three times** in the prompt, and **reloading or navigating** while the
+  prompt is showing (don't press F5 — just enter the password). The prompt's small **Go to sign in**
+  link does the same on purpose (use it if a *different* person needs to sign in). In every case just
+  log in again; nothing is lost.
 - You can also be sent to the login page with the notice *"Your access changed — please sign in
   again."* — that's not a timeout, it means an admin changed your role (or your role's permissions)
   and your session was ended so the new permissions apply. Sign in again.

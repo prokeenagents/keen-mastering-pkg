@@ -31,7 +31,7 @@ npx tsx run.ts \
 
 Everything but `--prompt` is normally set once in `.env` (see `.env.example` — nine core values plus a few optional ones; write values unquoted); each run is then just `npx tsx run.ts --prompt "…"`. The WebSocket endpoint is **derived** from `KEEN_HOST` (`wss://<host>/ws-keen`); `projectID` defaults to `KEEN_SPACE_ID`.
 
-A successful run prints the live tokens, then one `flow` line per bundle, then a `summary` line, and exits 0. **Exit 0 means the run settled, not that it reached an End node** — a flow also completes when an unwired output ends it, so read `endReached` (on each `flow` line and in the `summary`). Exit `1` = the run failed (the partial tree is printed first), `2` = bad arguments. Flags take `--key value` or `--key=value`.
+A successful run prints the live tokens, then one `flow` line per bundle, then a `summary` line, and exits 0. **Exit 0 means the run settled, not that it reached an End node** — a flow also completes when an unwired output ends it, so read `endReached` (on each `flow` line and in the `summary`). Exit `1` = the run failed (the partial tree is printed first), `2` = bad arguments (or a prompt over the platform's 20 000-character limit, refused before it is sent). Flags take `--key value` or `--key=value`.
 
 ## Flags
 
@@ -41,10 +41,10 @@ A successful run prints the live tokens, then one `flow` line per bundle, then a
 | `--origin` | `KEEN_ORIGIN` | **Required in practice.** Must equal the origin on a webhook record bound to an api_key (the relay's allow-list, exact match) — any other Origin, or none (a Node client sends none), gets the upgrade refused. |
 | `--space` | `KEEN_SPACE_ID` | The space id. |
 | `--agent` | `KEEN_AGENT` | The agent **slug** (e.g. `agent-one`) — NOT the row id. |
-| `--token` | `KEEN_TOKEN` | A consumer `access_token` — the **only** auth (there is no login step). **Headless way (the Keen MCP server):** an MCP account creates an **MCP consumer** (id + secret, no email/password, never an OTP) and calls `get_mcp_consumer_token` (id + secret) → `access_token` = `KEEN_TOKEN`, and the consumer's id = `KEEN_USER_ID`; `KEEN_EMAIL` can be any non-empty value (an MCP consumer has none); `KEEN_ORIGIN` must be the api key's allow-listed origin — see [`../../keen-mcp-guide/README.md`](../../keen-mcp-guide/README.md). **Alternative (a human consumer):** copy the token from the consumer app's browser cookies. |
+| `--token` | `KEEN_TOKEN` | A consumer `access_token` — the **only** auth (there is no login step). **Headless way (the Keen MCP server):** an MCP account creates an **MCP consumer** (id + secret, no email/password, never an OTP) and calls `get_mcp_consumer_token` (id + secret) → `access_token` = `KEEN_TOKEN`, and the consumer's id = `KEEN_USER_ID`; `KEEN_EMAIL` can be any non-empty value (an MCP consumer has none); `KEEN_ORIGIN` must be the api key's allow-listed origin — see [`../../keen-mcp-guide/README.md`](../../keen-mcp-guide/README.md). **Alternative (a human consumer):** copy the token from the consumer app's browser cookies. The access token lives **10 minutes** — mint a fresh one before a run. |
 | `--user-id` | `KEEN_USER_ID` | **Required for a consumer token** — its `sub` is sealed in the token's `hash` (only the Keen server opens it), and the Keen server enforces `userId === sub`. Pass the consumer's id. |
 | `--email` | `KEEN_EMAIL` | Presence-only (the Keen server requires it non-empty but does not match it). Defaults to the token's `email` claim if present; otherwise pass any value. |
-| `--prompt` | `KEEN_PROMPT` | The user turn (per-run; `KEEN_PROMPT` is read as a fallback, but a prompt is normally not pinned in `.env`). |
+| `--prompt` | `KEEN_PROMPT` | The user turn, at most **20 000 characters** (the platform's limit, `E2101`; per-run; `KEEN_PROMPT` is read as a fallback, but a prompt is normally not pinned in `.env`). |
 | `--chat-id` | `KEEN_CHAT_ID` | Reuse to continue **one** conversation (default: a fresh id). **Prefer a stable id** — see *Continuing a conversation* below. |
 | `--cookie name=value` | `KEEN_COOKIES` | A cookie the flow's script nodes should see (repeatable), read via `system/cookies`. |
 | `--json` | — | NDJSON output (machine). Omit for a human-readable trace. |
@@ -67,7 +67,7 @@ A successful run prints the live tokens, then one `flow` line per bundle, then a
 - `t:"flow"` `endReached` — whether that flow got its End node's `{ final: true }`; `false` means an unwired output ended it.
 - `t:"summary"` — the verdict: `ok`, the number of flow bundles, how many reached an End node, and `error` on a failure. On a failure the **partial** tree (as far as the run got) is printed as `flow` lines before it.
 - Credentials never reach stdout: the SDK stamps the live `access_token` on every bundle's `userContext`, and the runner prints it as `"<redacted>"`. stdout carries only these lines — anything the SDK logs goes to stderr.
-- `t:"meta"` — runner notes. **Exit code**: `0` the run settled (check `endReached`) · `1` run failed · `2` bad args · `130` cancelled (Ctrl+C).
+- `t:"meta"` — runner notes. **Exit code**: `0` the run settled (check `endReached`) · `1` run failed · `2` bad args (or a prompt over the 20 000-character limit) · `130` cancelled (Ctrl+C).
 
 Human mode (no `--json`) prints the same information as an indented, readable trace — the stream/flow lines on stdout, the runner's `meta` notes on **stderr**.
 
@@ -85,16 +85,27 @@ Switch to a **new** id only when the agent starts behaving erratically / incoher
 
 ## Stopping a flow
 
-- **Ctrl+C (SIGINT)** — the runner calls `sendCancel(cid)`, which tells the Keen server to wipe this run's `dict` / `session` / `agentState` / queue, then disconnects and exits `130`. A half-run leaves **nothing** behind. A second Ctrl+C hard-exits immediately.
-- Programmatically (own client): `chat.cancel()` — it stops the local drain loop AND sends the cancel frame. `chat.sendCancel()` alone is what `run.ts` uses only because it disconnects and exits right after; in a client that keeps running, the drain loop keeps retrying the wiped cid (`E6002`) forever. See [SDK-API.md](./SDK-API.md#stopping-cancel).
-- Killing the process WITHOUT cancelling (e.g. `kill -9`) still ends the flow: closing the socket makes the Keen server cancel this connection's cid on the engines (its disconnect handler fires the same cancel). Ctrl+C is still preferred — an explicit cancel plus a clean exit `130`.
+- **Ctrl+C (SIGINT)** — the runner calls `chat.cancel()`, which tells the Keen server to wipe this run's `dict` / `session` / `agentState` / queue (or, while the socket is reconnecting, sends it right after the resume), then disconnects and exits `130`. A half-run leaves **nothing** behind. A second Ctrl+C hard-exits immediately.
+- Programmatically (own client): `chat.cancel()` — it stops the local drain loop AND sends the cancel frame. `chat.disconnect()` cancels a running flow first, too. `chat.sendCancel()` alone leaves the drain loop running: it keeps retrying the wiped cid (`E6002`) forever. See [SDK-API.md](./SDK-API.md#stopping-cancel).
+- Killing the process WITHOUT cancelling (e.g. `kill -9`) no longer ends the flow at once: since Keen 15.3 a closed socket only DETACHES the flow, so a dropped connection can resume. The Keen server ends it when its grace runs out (120 s by default). Ctrl+C is preferred — an explicit cancel plus a clean exit `130`.
+
+## A dropped connection
+
+A dropped socket reconnects by itself (full-jitter backoff, 1 → 2 → 4 → 8 → 10 s caps, no limit) and **resumes** the running flow on its cid; every awaited node is re-sent with its original requestId, and the flow goes on. The runner prints the SDK's lines as `meta`:
+
+```jsonc
+{"t":"meta","line":"close (code 1006) — reconnecting in 0.6 s (attempt 1)"}
+{"t":"meta","line":"resumed — correlationID 49dece98-… after 8.4 s"}
+```
+
+The run fails only on a server answer: `connection lost — the server no longer holds this flow` (the grace ran out, or a cancel came first), `connection taken over by another session` (close 4409), or `connection lost — this Keen server cannot resume a flow` (a Keen server older than 15.3). The runner has no token refresher: a `resume refused (token)` (the token expired or was revoked while the socket was away) ends the run with `Invalid token` — rerun with a fresh `KEEN_TOKEN`. Stream frames emitted while the socket was away are not replayed; the `flow` lines are complete.
 
 ## The two channels
 
 | Need | Channel |
 |---|---|
 | The agent **drives** the run and wants the full node/LLM/error trace | **this runner** (Client API / ChatSDK) — synchronous, complete, zero-instrumentation |
-| Watch runs the agent did **not** trigger, or ambient `Log.*` tails | **Keen's live log stream** — dev sandbox: `WS ws://<keen-host>:5540/monitor/stream/<space>/<agent>?token=<readToken>` (ms-monitor's published port; the read-token rides the `token` query, a bad one is refused with a plain 401 before the handshake). **Production has no external route for it yet** — the nginx edge does not proxy `/monitor/`, so a `wss://<host>/monitor/…` URL lands on the admin UI. |
+| Watch runs the agent did **not** trigger, or ambient `Log.*` tails | **Keen's live log stream** — `WSS wss://<host>/monitor/stream/<spaceId>/<agentSlug>?token=<readToken>` on the same host as the console (the read-token rides the `token` query; a bad one is refused with a plain 401 before the handshake). |
 
 ## Troubleshooting
 
@@ -103,8 +114,9 @@ Switch to a **new** id only when the agent starts behaving erratically / incoher
 | `run FAILED: socket closed before the relay's welcome: Unexpected server response: 502 …` | The upgrade was refused — almost always an Origin that is not allow-listed → pass the allow-listed `--origin`; a 502 can also mean the relay itself is down. |
 | `run FAILED: socket closed before the relay's welcome: connect ECONNREFUSED …` / a TLS error | The host is unreachable or `--host` / `KEEN_HOST` is wrong; for a self-signed cert prefix `NODE_TLS_REJECT_UNAUTHORIZED=0`. |
 | `run FAILED: no welcome from the relay within 15s …` | The socket opened but the relay never sent its `welcome` — the relay is not answering. |
-| `run FAILED: Invalid token` | Bad/expired token → supply a valid consumer `--token`. |
+| `run FAILED: Invalid token` | Bad/expired token → supply a valid consumer `--token`. The access token lives **10 minutes**: mint a fresh one right before the run (`get_mcp_consumer_token` / `refresh_mcp_consumer_token`). |
+| `run FAILED: The message is too long (at most 20000 characters).` | The prompt is over the platform's limit (`E2101`) — shorten it. The runner refuses it before sending (exit 2) when the server announced the limit. |
 | `userContext.userId does not match token subject` | Missing/wrong `--user-id` → pass the consumer's id (= the sealed `sub`). |
 | `Missing userContext.userId / userContext.email` | Pass both `--user-id` and a non-empty `--email`. |
 
-The `sdk/` folder is functionally identical to entanglement's ChatSDK (comment-only drift; `KeenChat` + `HOW_TO_USE` not included) — zero project imports. Its `App.Chat.*` ambient types live in entanglement's `src/@types/chat.d.ts` (not shipped here; `tsx` runs the SDK untyped).
+The `sdk/` folder is the Keen 15.3 ChatSDK (reconnect / resume, the prompt limit, `onSummarizing`; `KeenChat` + `HOW_TO_USE` not included) — zero project imports. The public reference site (entanglement) `main` still ships the earlier SDK without those. Its `App.Chat.*` ambient types live in entanglement's `src/@types/chat.d.ts` (not shipped here; `tsx` runs the SDK untyped).

@@ -16,9 +16,9 @@ unit of "who can reach these agents." Deleting a space **cascades**: the agents 
 ### Create a space
 
 1. Go to **AI → Spaces → Create**.
-2. Give it a **title** and a **description** (both required and **both unique** — title up to 150
-   characters, description up to 500; two spaces can't share a description either, and a duplicate is
-   refused with a general "not acceptable" message).
+2. Give it a **title** and a **description** (both required; the **title is unique** — up to 150
+   characters, and a duplicate title is refused with a general "not acceptable" message; the description,
+   up to 500 characters, may repeat).
 3. Save. The space now has its own **Space ID** (there's a copy button) and a **deployment token**.
 4. On the detail page you'll find the **copy icon** next to the deployment token and a **Reset Token**
    button (write permission only), the **Space ID** copy icon, and — once the space has at least one

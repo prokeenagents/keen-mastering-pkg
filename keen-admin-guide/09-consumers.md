@@ -79,9 +79,10 @@ token** that expires (see Refresh below), and both are checked together on every
 - **One-time passcode.** Where the tenant's policy requires it, login returns a "Verify" challenge and
   emails a **6-digit passcode** instead of signing the user straight in. It's short-lived and
   single-use.
-- **Refresh.** The browser's access token lasts a limited time (7 days on today's sandboxes); the
-  site refreshes it in the background. A refresh **spends** the old refresh token, so the partner
-  serializes refreshes (two at once make one fail).
+- **Refresh.** The browser's access token lasts **10 minutes**; the site refreshes it in the
+  background (the refresh token lasts about 7.5 days). A refresh **spends** the old refresh token:
+  a second refresh with the same token within a few seconds gets the same new pair, but a reuse
+  after that ends every session of that consumer — so the partner serializes refreshes.
 
 The full wire-level detail (headers, the passcode confirm step, refresh semantics) belongs to the
 partner integration — see `06-connect-a-partner-site.md`.
@@ -173,21 +174,20 @@ old one stops at once), and **Delete** (two-step confirm).
 > contract and the spaces stay with the agent. But a compromised or abandoned consumer must be
 > stoppable **without a bot** — so any admin with write can flip it off, re-key it (the secret the
 > agent stored stops working; it needs the new one) or remove it. Prefer **Enabled** off when you
-> only want a pause. Know how far each one reaches: **Delete** stops any new token and any refresh
-> for good; **Enabled** off does the same for as long as it stays off; **Rotate Secret** only retires
-> the secret — a session the agent already holds keeps refreshing. None of the three stops an access
-> token already issued: it keeps working until it expires (up to 7 days on today's sandboxes). For a
-> compromised consumer, delete it — don't rely on a rotate.
+> only want a pause. Know how far each one reaches: all three **end every session the consumer has
+> at once** — the tokens it already holds are refused from that moment. **Delete** is for good;
+> **Enabled** off lasts until you switch it back on (then the agent signs it in again); after
+> **Rotate Secret** the agent signs in again with the new secret.
 
 Everything else about tenancy holds for them exactly as for humans: they see only their contract's
 spaces, a space revoked from the contract stops working for them immediately, and they never cross
 tenants.
 
-Moving or unbinding a consumer signs its current session out — the partner site is notified and the user
-logs in again. (The sign-out is the partner site's job: a site that ignores the notice keeps the old
-session until its access token expires.) Whenever an admin changes a consumer's spaces or tenant,
-the partner is nudged via **notify-then-fetch** (`08-wake.md`), and the expected reaction is a
-**re-login**, since a consumer's entitlements are fixed into its session when it signs in.
+Moving or unbinding a consumer, taking spaces away from it, resetting its password or deleting it
+**ends its sessions at once** — the platform refuses the tokens it already holds, and the user logs
+in again. Whenever an admin changes a consumer's spaces or tenant, the partner is also nudged via
+**notify-then-fetch** (`08-wake.md`); a space you *add* reaches the consumer at its next sign-in,
+since a consumer's entitlements are fixed into its session when it signs in.
 
 ## Watch out for
 

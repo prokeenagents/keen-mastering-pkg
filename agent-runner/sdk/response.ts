@@ -36,6 +36,12 @@ export default class ResponseAPI {
     private readonly pending = new Map<string, Pending>();
     private readonly responseHandlers = new Set<ResponseHandler>();
     private readonly streamHandlers = new Set<StreamEventHandler>();
+    /**
+     * Fired for every response envelope that names a requestId, before any
+     * waiter resolves. ChatAPI wires it to SendRequest.settle, so a frame
+     * leaves the re-send registry the moment its reply lands.
+     */
+    private settleHook: ((requestId: string) => void) | null = null;
 
     constructor(options: ResponseAPIOptions = {}) {
         this.defaultTimeoutMs = options.defaultTimeoutMs ?? CHAT_SETTINGS.RESPONSE_TIMEOUT_MS;
@@ -53,6 +59,8 @@ export default class ResponseAPI {
 
         if (envelope) {
             if (requestId) {
+                this.settleHook?.(requestId);
+
                 const pending = this.pending.get(requestId);
 
                 if (pending) {
@@ -82,6 +90,10 @@ export default class ResponseAPI {
      * Calling waitFor with the same requestId twice replaces the
      * earlier waiter — typically a bug at the call site, so we reject
      * the earlier promise to surface it.
+     *
+     * The timer is NOT disposed when the socket closes: a
+     * waiter that times out lets the node re-send the same visit id, and
+     * the relay joins the dispatch already running.
      */
     waitFor(requestId: string, timeoutMs?: number): Promise<Envelope> {
         const previous = this.pending.get(requestId);
@@ -100,6 +112,35 @@ export default class ResponseAPI {
 
             this.pending.set(requestId, { resolve, reject, timer });
         });
+    }
+
+    /**
+     * Register the settle hook (one; a later call replaces it). See settleHook.
+     */
+    setSettleHook(hook: ((requestId: string) => void) | null): void {
+        this.settleHook = hook;
+    }
+
+    /**
+     * Reject pending waitFor promises with `err`, keeping the subscribers —
+     * the connection lives on. With `requestIds`, only those waiters; without,
+     * every one. TaskQueue calls it when a flow is cancelled or its
+     * connection is lost, so its nodes stop waiting at once.
+     */
+    failAll(err: Error, requestIds?: Iterable<string>): void {
+        const ids = requestIds ? Array.from(requestIds) : Array.from(this.pending.keys());
+
+        for (const requestId of ids) {
+            const pending = this.pending.get(requestId);
+
+            if (!pending) {
+                continue;
+            }
+
+            clearTimeout(pending.timer);
+            this.pending.delete(requestId);
+            pending.reject(err);
+        }
     }
 
     /**

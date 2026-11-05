@@ -41,6 +41,7 @@ Every tool reads the same **`.env`** (`agent-runner/.env`), so the loop is just 
 | **`keen-validate`** | `bin/` (prebuilt) | Go binary — static pre-deploy validator. `keen-validate --help` | `agent-runner/docs/VALIDATE.md` · rules in `keen-flow-validator/README.md` |
 | **`keen-deploy`** | `bin/` (prebuilt) | Go binary — the uploader (connect → zip → upload). `keen-deploy --help` | `agent-runner/docs/DEPLOY.md` |
 | **`run.ts`** | `agent-runner/` | TypeScript runner — drives the ChatSDK / **TaskQueue** and prints the trace (`npm install` once). `npx tsx run.ts --help` | `agent-runner/README.md` · `agent-runner/docs/USAGE.md` |
+| **`debug.ts`** | `agent-runner/` | Outside the loop — a one-time attach address for the flow / script debugger, signed in with the `user` + `password` of the flow project's `.vscode/keen.json` (git-ignored, never committed). `npx tsx debug.ts --help` | `agent-runner/docs/DEBUG.md` |
 
 `bin/` holds the two binaries for linux / darwin / windows × amd64 / arm64 — nothing to compile. (The distributed package ships binaries only; the Go sources live in the maintainers' working copy.)
 
@@ -66,7 +67,7 @@ The runner needs `cd agent-runner && npm install` once.
 | Folder | What |
 |---|---|
 | `agent-runner/` | The build loop: `run.ts` (TS runner + ChatSDK/TaskQueue), `.env`, and `docs/` (VALIDATE / DEPLOY / USAGE / TASK-QUEUE / SDK-API). The `keen-deploy` binary lives in `bin/`. |
-| `keen-mcp-guide/` | How a building agent operates the Keen **MCP server**: connect (`https://<host>/mcp`), log in as an MCP account, the can/can't rules, the 96 tools by domain, and the provisioning golden path that ends in the runner's `.env`. |
+| `keen-mcp-guide/` | How a building agent operates the Keen **MCP server**: connect (`https://<host>/mcp`), log in as an MCP account, the can/can't rules, the 78 tools by domain, and the provisioning golden path that ends in the runner's `.env`. |
 | `keen-flow-validator/` | The static validator's rules: the plain-Node reference (`validate.js` / `node-spec.js` / `script-lint.js`) that defines them. The shipped `keen-validate` binary in `bin/` implements the same rules. |
 | `shira-flow-builder-guide/` | The guide to building flows in the Shira canvas — nodes, scripts, the contracts the validator enforces. |
 | `shira-flow-builder-notes/` · `shira-flow-builder-hystory/` | Working notes and history behind the guide. |

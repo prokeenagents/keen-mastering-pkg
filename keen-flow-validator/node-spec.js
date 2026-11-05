@@ -15,11 +15,11 @@
  * Both are enforced; the README says which is which.
  */
 
-/** The 14 node type strings (node-types.ts). */
+/** The 15 node type strings (node-types.ts). */
 const NODE_TYPES = [
     'startNode', 'endNode', 'conditionNode', 'loopNode', 'runFlowNode', 'jumpFlowNode',
     'joinNode', 'assignmentNode', 'scriptNode', 'agentNode', 'parallelInNode',
-    'parallelFlowNode', 'parallelContextNode', 'noteNode'
+    'parallelFlowNode', 'parallelContextNode', 'noteNode', 'summarizerNode'
 ];
 
 /**
@@ -80,7 +80,7 @@ const SPEC = {
     },
     agentNode: {
         labelNode: 'LLM', descriptionNode: 'Use LLM processor',
-        sources: ['error', 'next_1'], targets: ['in'], multiIn: ['in'],
+        sources: ['error', 'next_1', 'summary'], targets: ['in'], multiIn: ['in'],
         requiredOut: ['next_1'], recommendOut: ['error'], width: 170
     },
     parallelInNode: {
@@ -103,6 +103,14 @@ const SPEC = {
         labelNode: 'Note', descriptionNode: 'Write your notes here',
         sources: [], targets: [], multiIn: [],
         requiredOut: [], recommendOut: [], width: 500
+    },
+    // The Summarizer: a real flow step with three handles: `in` (a merge handle: several LLM nodes may share one Summarizer, and it
+    // may be another Summarizer's Fallback), `error` (Fallback, only to another Summarizer) and `next_1` (Out, like any Out).
+    // Out is NOT a required out: a v1 Summarizer without Out still deploys (the flow ends there), and no rule checks where it leads.
+    summarizerNode: {
+        labelNode: 'Summarizer', descriptionNode: "Writes the chat summary for an LLM node's Summary output",
+        sources: ['error', 'next_1'], targets: ['in'], multiIn: ['in'],
+        requiredOut: [], recommendOut: [], width: 170
     }
 };
 

@@ -72,4 +72,4 @@ None — it's never executed.
 
 ---
 
-*That's all 14 node types. Back to the index: `../README.md`.*
+*Next node: Summarizer (`summarizer-node.md`) — that's all 15 node types. Back to the index: `../README.md`.*

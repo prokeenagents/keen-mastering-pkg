@@ -12,15 +12,15 @@ Every delete in the admin is **two-step** (click to arm, click again to confirm)
 | You delete… | What happens | Takes with it | Protected? |
 |---|---|---|---|
 | **Account** | that person loses access | nothing else (keys aren't owned by accounts) | the **owner** account can't be deleted; an **admin** account only by the owner (never by another admin) |
-| **MCP account** | the AI agent's ID + secret stop working **immediately** | nothing else — its MCP consumers keep working, and any other MCP account with `mcp_consumers` write can manage them | — (only a **human** with `mcp_accounts` write can delete one) |
+| **MCP account** | the AI agent's ID + secret stop working **immediately** | nothing else — its MCP consumers keep working, and any other MCP account with `mcp_consumers` write can manage them | — (only a **human** owner or admin can delete one) |
 | **Role** | the role is removed | nothing — its accounts (human **and** MCP) are **moved to the default role** | **owner / admin / default / developer** roles can't be deleted |
 | **Space** | the space is removed | **all its agents** (and their settings) — a full cascade | — |
 | **Agent** | the agent + its settings are removed | nothing (its space stays) | — |
 | **Api Key** | access is **revoked** immediately | its four bound resources are **unbound, not deleted** | — |
 | **Client / Certificate / Contract** | that record is removed | **unbinds** from any key it was on (key survives, half-wired); a **Contract** also **releases** its consumers and MCP consumers (see below) | — |
 | **Webhook** | that record is removed — but only while **no key holds it** | nothing; the delete is **refused while an api key is bound to it** (unbind it on the key first) | refused while bound |
-| **Consumer** | that end user can no longer sign in or refresh (an access token already issued runs until it expires — up to 7 days on today's sandboxes) | nothing | — |
-| **MCP consumer** | the AI agent's consumer credential (ID + secret) stops working **immediately** — no new token, no refresh; an access token already issued runs until it expires (up to 7 days on today's sandboxes) | nothing | — (`Delete` on its detail page, two-step, with `mcp_consumers` write; an **MCP account** can delete one via the Keen MCP server too) |
+| **Consumer** | that end user can no longer sign in or refresh, and the tokens it already holds are refused at once | nothing | — |
+| **MCP consumer** | the AI agent's consumer credential (ID + secret) stops working **immediately** — no new token, no refresh, and the tokens it already holds are refused at once | nothing | — (`Delete` on its detail page, two-step, with `mcp_consumers` write; an **MCP account** can delete one via the Keen MCP server too) |
 
 ## The details worth saying out loud
 
@@ -65,17 +65,17 @@ account can be deleted only by the owner — an admin trying it on another admin
 can't authenticate through the Keen MCP server from that moment. Nothing else goes with it; an MCP
 consumer belongs to its contract, not to the account that created it — its `Created by` still names
 the deleted account, but it keeps working, and any other MCP account with `mcp_consumers` write can
-manage it (humans with that write scope keep their three lifecycle controls). Only a **human** with the
-`mcp_accounts` write scope can delete one — an MCP account can never delete MCP accounts (or anything
-under Accounts / Roles), whatever its role. If you only want to pause the agent, switch **Enabled** off
+manage it (humans with that write scope keep their three lifecycle controls). Only a **human** owner or
+admin can delete one — an MCP account can never delete MCP accounts (or anything under Accounts /
+Roles), whatever its role. If you only want to pause the agent, switch **Enabled** off
 instead — that's reversible; delete is not. See `02-organization.md`.
 
 **Consumer.** An end user of a partner site can be deleted by an admin, or can delete their own
 account through the site's self-service — see `09-consumers.md`.
 
 **MCP consumer.** The AI agent's own consumer identity. Deleting it revokes its ID + secret
-**immediately** — it can't sign in again and a refresh is refused; an access token it already holds
-keeps working until that token expires. A human with `mcp_consumers` write deletes it from its detail
+**immediately** — it can't sign in again, a refresh is refused, and the tokens it already holds are
+refused at once. A human with `mcp_consumers` write deletes it from its detail
 page in the admin console (`Delete`, two-step confirm); the MCP account that manages it can delete it
 through the Keen MCP server as well. Want a pause, not an end? Flip **Enabled** off instead. See
 `09-consumers.md`.
