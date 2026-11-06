@@ -59,7 +59,8 @@ use — one window per debugger at a time"*).
 password into their flow project's `.vscode/keen.json` (`user` + `password`, next to its `server`,
 `space` and `token` — a local file, git-ignored, never committed: it holds the password and the
 deployment token); the Keen VS Code extension (0.0.4 or newer — the console's home page has a
-**Download Ext** button) signs in with them and connects. The toolkit's `agent-runner/debug.ts` does
+**Download Ext** button) signs in with them and connects. With two-step sign-in on the account it needs
+0.0.6 or newer, which asks the code in a box each time it connects. The toolkit's `agent-runner/debug.ts` does
 the same for a manual attach.
 
 **Built-in safety nets:**
@@ -78,7 +79,8 @@ So the honest split to tell a colleague:
 
 - **"The debugger won't connect"** — in order: is it switched **on** (Debugger page)? Does the person's
   role have the **Debugger** permission? Are `user` / `password` in their `keen.json` their *console*
-  login? Is the extension 0.0.4 or newer? The extension's message names which one (*"The debugger is
+  login? Is the extension 0.0.4 or newer — and 0.0.6 or newer when the account has two-step sign-in
+  (it then asks the code)? The extension's message names which one (*"The debugger is
   off — …"*, *"Your role has no Debugger permission — …"*, *"Sign-in refused — check "user" and
   "password" in .vscode/keen.json …"*).
 - **Switch it off when the team is done** — off is the default for a reason; switching off also closes open

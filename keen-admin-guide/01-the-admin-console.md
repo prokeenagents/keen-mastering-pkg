@@ -100,6 +100,31 @@ lose your spot** — you continue exactly where you were.
   again."* — that's not a timeout, it means an admin changed your role (or your role's permissions)
   and your session was ended so the new permissions apply. Sign in again.
 
+### Two-step sign-in (a code after the password)
+
+You can protect your account with a second step: after the password the console asks a **6-digit code**.
+
+- **Turn it on:** avatar menu → **Account** → the **Security** card. Pick **Authenticator app** (scan
+  the QR code with Google Authenticator, Authy or a similar app — or type the secret shown under it —
+  then enter the code the app shows) or **E-mail code** (a code is mailed to you; enter it to confirm).
+  The card then says which one is on and since when. **Disable** there asks a current code.
+- **At every sign-in** the code comes after the password: from your app, or from the e-mail (it
+  expires after a few minutes; **Resend** sends a new one after a short wait). The **Session locked**
+  panel asks it the same way after your password. A wrong code is answered with one general message;
+  after a few wrong codes you start again from the password.
+- **The owner can require it for everyone:** the Accounts page → **Require MFA for every account**
+  (owner only, and only once the owner's own account has it). Accounts without it are signed out at
+  once and set it up at their next sign-in, before they get in (choosing the app there, an e-mailed
+  code comes first, then the QR code). While it is required, **Disable** becomes **Change method**: the
+  same current code, then you are signed out and set up the new method at your next sign-in.
+- **Lost the phone or the mailbox?** The owner or an admin opens the account in **Accounts** →
+  **Reset MFA**. That ends the person's sessions; if the organization requires it, they set it up
+  again at their next sign-in.
+- **The debugger tools ask too:** the VS Code extension (**0.0.6 or newer**; an older one cannot sign
+  in an account with two-step sign-in) shows a box for the code when it starts a debugger, and `npm run debug` (the agent runner) asks it in the terminal — `r` + Enter there sends a
+  new e-mailed code; without a terminal, set `KEEN_MFA_CODE` for that one run. An account the
+  organization requires it of, but without it set up, is told to set it up in the console first.
+
 ## Watch out for
 
 - **"It's broken" is usually "I don't have permission."** Check the role before you chase a bug.

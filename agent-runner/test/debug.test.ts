@@ -20,7 +20,16 @@ const SPACE = 'space-1';
 /** How the fake server answers the mode probe; `calls` records every request line. */
 type Probe = { status: number; body?: string; headers?: Record<string, string> };
 
-async function fakeServer(probe: Probe, ticket: { status: number; body: unknown } = { status: 200, body: { success: true, status: 200, message: 'Success', result: { ticket: TICKET, expires_in: 300, kind: 'flow', space: SPACE, path: `/dbg/${TICKET}` } } }) {
+/** A canned answer of the fake org API. */
+type Reply = { status: number; body: unknown };
+
+/** The sign-in legs of the fake (the defaults: a login without two-step sign-in). */
+type Auth = { login?: Reply; verify?: (body: Record<string, unknown>) => Reply; resend?: Reply };
+
+const PAIR: Reply = { status: 200, body: { success: true, status: 200, message: 'Success', result: { access_token: 'acc-secret', refresh_token: 'ref-secret' } } };
+const DEFAULT_TICKET: Reply = { status: 200, body: { success: true, status: 200, message: 'Success', result: { ticket: TICKET, expires_in: 300, kind: 'flow', space: SPACE, path: `/dbg/${TICKET}` } } };
+
+async function fakeServer(probe: Probe, ticket: Reply = DEFAULT_TICKET, auth: Auth = {}) {
     const calls: { method: string; url: string; body: string }[] = [];
     const server = createServer((req: IncomingMessage, res: ServerResponse) => {
         let body = '';
@@ -32,7 +41,16 @@ async function fakeServer(probe: Probe, ticket: { status: number; body: unknown 
                 res.end(typeof payload === 'string' ? payload : JSON.stringify(payload));
             };
             if (req.url === '/keen-org-api/v1/auth/login') {
-                return send(200, { success: true, status: 200, message: 'Success', result: { access_token: 'acc-secret', refresh_token: 'ref-secret' } });
+                const login = auth.login ?? PAIR;
+                return send(login.status, login.body);
+            }
+            if (req.url === '/keen-org-api/v1/auth/login/verify') {
+                const answer = auth.verify?.(JSON.parse(body || '{}')) ?? PAIR;
+                return send(answer.status, answer.body);
+            }
+            if (req.url === '/keen-org-api/v1/auth/login/resend') {
+                const answer = auth.resend ?? { status: 200, body: { success: true, status: 200, message: 'Success', result: { sent: true } } };
+                return send(answer.status, answer.body);
             }
             if (req.url === '/keen-org-api/v1/debug/ticket') {
                 return send(ticket.status, ticket.body);
@@ -64,11 +82,14 @@ async function project(keen: Record<string, string>): Promise<string> {
     return dir;
 }
 
-function runDebug(args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
+function runDebug(args: string[], extraEnv: Record<string, string> = {}): Promise<{ code: number | null; stdout: string; stderr: string }> {
     return new Promise(resolve => {
-        // cwd = the runner (tsx resolves from there); KEEN_PROJECT_DIR unset so only --project counts.
-        const env = { ...process.env };
+        // cwd = the runner (tsx resolves from there); KEEN_PROJECT_DIR / KEEN_MFA_CODE unset so only the test's values count.
+        const env: NodeJS.ProcessEnv = { ...process.env, ...extraEnv };
         delete env.KEEN_PROJECT_DIR;
+        if (!('KEEN_MFA_CODE' in extraEnv)) {
+            delete env.KEEN_MFA_CODE;
+        }
         const child = spawn(process.execPath, ['--import', 'tsx', 'debug.ts', ...args], { cwd: RUNNER, env });
         let stdout = '';
         let stderr = '';
@@ -184,4 +205,87 @@ test('a debugHost that is not a host name → exit 2, nothing sent', async () =>
     const out = await runDebug(['--kind=flow', '--project', dir, '--json']);
     assert.equal(out.code, 2);
     assert.match(out.stderr, /debugHost/);
+});
+
+// ------------------------------------------------------------------ two-step sign-in
+
+const CHALLENGE = 'chl-secret-handle';
+const CODE = '482915';
+const verifyLogin = (method: 'totp' | 'email'): Reply => ({ status: 200, body: { success: true, status: 200, statusCode: 201, message: 'Verify', result: { challenge: CHALLENGE, method } } });
+const checkCode = (body: Record<string, unknown>): Reply =>
+    body.challenge === CHALLENGE && body.code === CODE ? PAIR : { status: 406, body: { success: false, status: 406, message: 'Not Acceptable' } };
+const noSecrets = (text: string) => assert.ok(!/pw-secret|acc-secret|ref-secret|chl-secret|482915/.test(text), 'a secret or the code reached the output');
+
+test('two-step sign-in: KEEN_MFA_CODE → verify { challenge, code } → the ticket and the attach as before; the code never printed', async () => {
+    const srv = await fakeServer({ status: 200, body: '[]' }, DEFAULT_TICKET, { login: verifyLogin('totp'), verify: checkCode });
+    try {
+        const dir = await project({ server: srv.origin });
+        const out = await runDebug(['--kind=flow', '--project', dir, '--json'], { KEEN_MFA_CODE: CODE });
+        assert.equal(out.code, 0, out.stderr);
+        assert.deepEqual(srv.calls.map(c => c.url), [
+            '/keen-org-api/v1/auth/login',
+            '/keen-org-api/v1/auth/login/verify',
+            '/keen-org-api/v1/debug/ticket',
+            '/keen-org-api/v1/auth/logout',
+            `/keen-debug/flow/dbg/${TICKET}/json`
+        ]);
+        assert.deepEqual(JSON.parse(srv.calls[1].body), { challenge: CHALLENGE, code: CODE });
+        const all = lines(out.stdout);
+        assert.deepEqual(all.find(l => l.step === 'verify'), { t: 'meta', step: 'verify', method: 'totp' });
+        assert.equal(all.find(l => l.t === 'attach')?.mode, 'edge');
+        noSecrets(out.stdout + out.stderr);
+    } finally {
+        await srv.close();
+    }
+});
+
+test('two-step sign-in: a refused code → exit 1 with the same words as a refused password, asked once, no ticket', async () => {
+    const srv = await fakeServer({ status: 200, body: '[]' }, DEFAULT_TICKET, { login: verifyLogin('email'), verify: checkCode });
+    try {
+        const dir = await project({ server: srv.origin });
+        const out = await runDebug(['--kind=flow', '--project', dir, '--json'], { KEEN_MFA_CODE: '000000' });
+        assert.equal(out.code, 1);
+        const failLine = lines(out.stdout).find(l => l.t === 'fail');
+        assert.equal(failLine?.step, 'verify');
+        assert.match(String(failLine?.reason), /^bad credentials — check "user" and "password"/);
+        assert.deepEqual(srv.calls.map(c => c.url), ['/keen-org-api/v1/auth/login', '/keen-org-api/v1/auth/login/verify']);
+        assert.ok(!/000000/.test(out.stdout + out.stderr));
+    } finally {
+        await srv.close();
+    }
+});
+
+test('two-step sign-in without a terminal and without KEEN_MFA_CODE → exit 1, names both ways, no verify sent', async () => {
+    const srv = await fakeServer({ status: 200, body: '[]' }, DEFAULT_TICKET, { login: verifyLogin('totp'), verify: checkCode });
+    try {
+        const dir = await project({ server: srv.origin });
+        const out = await runDebug(['--kind=flow', '--project', dir, '--json']);
+        assert.equal(out.code, 1);
+        assert.match(String(lines(out.stdout).find(l => l.t === 'fail')?.reason), /terminal.*KEEN_MFA_CODE/);
+        assert.deepEqual(srv.calls.map(c => c.url), ['/keen-org-api/v1/auth/login']);
+    } finally {
+        await srv.close();
+    }
+});
+
+test('Enroll (the organization requires two-step sign-in, the account has none) → exit 1 "set it up in the console first", nothing else', async () => {
+    const enroll: Reply = { status: 200, body: { success: true, status: 200, statusCode: 202, message: 'Enroll', result: { challenge: CHALLENGE, methods: ['totp', 'email'] } } };
+    const srv = await fakeServer({ status: 200, body: '[]' }, DEFAULT_TICKET, { login: enroll });
+    try {
+        const dir = await project({ server: srv.origin });
+        const out = await runDebug(['--kind=flow', '--project', dir, '--json'], { KEEN_MFA_CODE: CODE });
+        assert.equal(out.code, 1);
+        assert.match(String(lines(out.stdout).find(l => l.t === 'fail')?.reason), /set up two-step sign-in in the console first \(My Account › Security\)/);
+        assert.deepEqual(srv.calls.map(c => c.url), ['/keen-org-api/v1/auth/login']);
+        noSecrets(out.stdout + out.stderr);
+    } finally {
+        await srv.close();
+    }
+});
+
+test('a KEEN_MFA_CODE that is not 6 digits → exit 2, nothing sent', async () => {
+    const dir = await project({ server: 'https://keen.example.com' });
+    const out = await runDebug(['--kind=flow', '--project', dir, '--json'], { KEEN_MFA_CODE: '12ab' });
+    assert.equal(out.code, 2);
+    assert.match(out.stderr, /KEEN_MFA_CODE must be the 6-digit code/);
 });

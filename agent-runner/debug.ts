@@ -23,12 +23,18 @@
  * e-mail), `password` and, optionally, `debugHost` (the host name for the port
  * fallback, instead of `server`'s). The password, the access token and the refresh token
  * are NEVER printed; the ticket appears only inside the attach URL / snippet.
+ *
+ * Two-step sign-in: an account with it is asked its code after the password — on the
+ * terminal (`r` + Enter = a new e-mailed code), or from the environment variable
+ * KEEN_MFA_CODE for a run without a terminal (read once, never printed).
  */
 import 'dotenv/config';
 
 import { readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
+
+import { ENROLL_FIRST, MFA_CODE_ENV, type CodeAnswer, type MfaMethod, askCodeOnTty, loginStep, normalizeCode } from './mfa-prompt';
 
 /** dotenv does NOT expand ~ — a value like `~/Desktop/BuildTest` arrives literal, so do it here. */
 function expandTilde(p: string): string {
@@ -86,6 +92,7 @@ CONFIG (flag first, then .env; --key value or --key=value)
   --project      / KEEN_PROJECT_DIR   the flow project ROOT — the folder that holds .vscode/keen.json (default: .)
   --json                              NDJSON output for the agent
   -h --help                           this help
+  KEEN_MFA_CODE  (environment)        the two-step sign-in code for a run without a terminal — used once, never printed
 
 .vscode/keen.json (a local secrets file — keep it git-ignored, never commit it)
   server    https://<host> of your Keen sandbox          user      your console account e-mail
@@ -95,6 +102,8 @@ CONFIG (flag first, then .env; --key value or --key=value)
 
 WHAT IT DOES
   POST <server>/keen-org-api/v1/auth/login       { email: user, password }   → an access token
+       — with two-step sign-in: asks the code (the authenticator app, or the e-mail: r + Enter = a new code)
+  POST <server>/keen-org-api/v1/auth/login/verify { challenge, code }        → an access token
   POST <server>/keen-org-api/v1/debug/ticket     { kind, space }             → a ticket
   POST <server>/keen-org-api/v1/auth/logout      (always — no org session is kept)
   GET  <server>/keen-debug/<kind>/dbg/<ticket>/json   the mode probe (does not use the ticket up)
@@ -109,13 +118,16 @@ WHAT IT DOES
   closed with "Debugger in use".
 
   Needs: the debugger switched ON by the owner or an admin (console → Debugger page) and a
-  role with the Debugger permission. The password and the tokens are never printed.
+  role with the Debugger permission. The password, the code and the tokens are never printed.
+  An organization that requires two-step sign-in refuses an account without it: set it up in the
+  console first (My Account › Security).
 
 EXIT CODES
   0  the attach address was printed
-  1  refused (bad credentials, too many sign-in attempts, no Debugger permission, the debugger is off,
-     the debugger refused the ticket) or the call failed (network, TLS, HTTP status)
-  2  bad arguments / configuration (nothing was sent)
+  1  refused (bad credentials or code, no code given, two-step sign-in not set up, too many sign-in
+     attempts, no Debugger permission, the debugger is off, the debugger refused the ticket) or the call
+     failed (network, TLS, HTTP status)
+  2  bad arguments / configuration, a KEEN_MFA_CODE that is not 6 digits (nothing was sent)
 
 For a self-signed dev cert, prefix the command with NODE_TLS_REJECT_UNAUTHORIZED=0.
 Full docs: agent-runner/docs/DEBUG.md
@@ -250,23 +262,20 @@ async function main(): Promise<void> {
         fail('the debugger needs a real "space" in .vscode/keen.json — it stops only runs of that space');
     }
 
+    // The code for a run without a terminal — taken once and removed from the environment (never printed).
+    const envCode = process.env[MFA_CODE_ENV];
+    delete process.env[MFA_CODE_ENV];
+    if (envCode !== undefined && normalizeCode(envCode) === null) {
+        fail(`${MFA_CODE_ENV} must be the 6-digit code`);
+    }
+
     const base = `${serverUrl.origin}/keen-org-api/v1`;
     const debugHost = config.debugHost || serverUrl.hostname;
 
     // 1) login — the console account in keen.json; the reply's tokens never reach the output.
     emit('meta', { step: 'login', server: serverUrl.origin, user: config.user });
-    const loginRes = await post(`${base}/auth/login`, JSON_HEADERS, JSON.stringify({ email: config.user, password: config.password }));
-    const tokens = resultOf<{ access_token?: string; refresh_token?: string }>(loginRes.json);
-    if (loginRes.status !== 200 || !tokens?.access_token) {
-        // ms-auth answers every wrong e-mail / password / blocked account with the same 406 (an edge 401 / 400 means the same to you).
-        const badCredentials = loginRes.status === 401 || loginRes.status === 406 || loginRes.status === 400;
-        let reason = badCredentials ? 'bad credentials — check "user" and "password" in .vscode/keen.json (your console account)' : messageOf(loginRes.json) || 'login failed';
-        if (loginRes.status === 429) {
-            // The sign-in throttle (per address and per e-mail) — never retry in a loop, it only lengthens the block.
-            const retryAfter = Number((loginRes.json as { retryAfter?: unknown } | null)?.retryAfter);
-            reason = `too many sign-in attempts — wait${Number.isFinite(retryAfter) && retryAfter > 0 ? ` ${Math.ceil(retryAfter)} s` : ' a while'}, then run this again`;
-        }
-        emit('fail', { step: 'login', status: loginRes.status, reason });
+    const tokens = await signIn(emit, base, config, envCode);
+    if (!tokens) {
         process.exit(1);
     }
 
@@ -311,6 +320,123 @@ async function main(): Promise<void> {
     }
 
     setTimeout(() => process.exit(code), 50);
+}
+
+// ------------------------------------------------------------------ sign-in
+
+type Tokens = { access_token: string; refresh_token?: string };
+
+/** The words of every refused sign-in — the same for a wrong password and a wrong code (never which part failed). */
+const BAD_CREDENTIALS = 'bad credentials — check "user" and "password" in .vscode/keen.json (your console account)';
+
+/** The most prompts one sign-in asks (each resend re-asks; the platform allows 3 resends). */
+const MAX_PROMPTS = 6;
+
+/** The sign-in throttle's `retryAfter` seconds, when present. */
+function retryAfterOf(json: unknown): number | undefined {
+    const value = Number((json as { retryAfter?: unknown } | null)?.retryAfter);
+    return Number.isFinite(value) && value > 0 ? Math.ceil(value) : undefined;
+}
+
+/** The reason of a refused login / verify / resend answer. */
+function signInRefusal(status: number, json: unknown): string {
+    // ms-auth answers every wrong e-mail / password / code / blocked account with the same 406 (an edge 401 / 400 means the same to you).
+    if (status === 401 || status === 406 || status === 400) {
+        return BAD_CREDENTIALS;
+    }
+    if (status === 429) {
+        // The sign-in throttle (per address and per e-mail) — never retry in a loop, it only lengthens the block.
+        const retryAfter = retryAfterOf(json);
+        return `too many sign-in attempts — wait${retryAfter ? ` ${retryAfter} s` : ' a while'}, then run this again`;
+    }
+    return messageOf(json) || 'login failed';
+}
+
+/**
+ * Login → the tokens; for an account with two-step sign-in the code (KEEN_MFA_CODE once, else the terminal prompt)
+ * → `/auth/login/verify`. Emits the `fail` line and answers undefined on any refusal. The code and the challenge
+ * never reach the output.
+ */
+async function signIn(emit: ReturnType<typeof makeEmitter>, base: string, config: KeenJson, envCode: string | undefined): Promise<Tokens | undefined> {
+    const loginRes = await post(`${base}/auth/login`, JSON_HEADERS, JSON.stringify({ email: config.user, password: config.password }));
+    if (loginRes.status !== 200) {
+        emit('fail', { step: 'login', status: loginRes.status, reason: signInRefusal(loginRes.status, loginRes.json) });
+        return undefined;
+    }
+
+    const step = loginStep(loginRes.json);
+    if (step.kind === 'enroll') {
+        emit('fail', { step: 'login', status: 202, reason: ENROLL_FIRST });
+        return undefined;
+    }
+    if (step.kind === 'pair') {
+        if (!step.tokens?.access_token) {
+            emit('fail', { step: 'login', status: 200, reason: 'login failed' });
+            return undefined;
+        }
+        return { access_token: step.tokens.access_token, refresh_token: step.tokens.refresh_token };
+    }
+
+    emit('meta', { step: 'verify', method: step.method });
+    const ask = codeSource(step.method, envCode);
+    if (!ask) {
+        emit('fail', { step: 'verify', reason: `this account signs in in two steps — run this in a terminal to enter the code, or set ${MFA_CODE_ENV} for one run` });
+        return undefined;
+    }
+
+    let note: string | undefined;
+    for (let prompts = 0; prompts < MAX_PROMPTS; prompts++) {
+        const answer = await ask(note);
+        if (!answer) {
+            emit('fail', { step: 'verify', reason: 'no code entered — run this again' });
+            return undefined;
+        }
+        if ('resend' in answer) {
+            const resent = await post(`${base}/auth/login/resend`, JSON_HEADERS, JSON.stringify({ challenge: step.challenge }));
+            if (resent.status === 200) {
+                note = 'A new code is on its way.';
+            } else if (resent.status === 429) {
+                const retryAfter = retryAfterOf(resent.json);
+                note = retryAfter ? `A new code can be sent in ${retryAfter} s — enter the last one meanwhile.` : 'No new code can be sent now — enter the last one.';
+            } else {
+                emit('fail', { step: 'verify', status: resent.status, reason: signInRefusal(resent.status, resent.json) });
+                return undefined;
+            }
+            emit('meta', { step: 'resend', sent: resent.status === 200 });
+            continue;
+        }
+        const verified = await post(`${base}/auth/login/verify`, JSON_HEADERS, JSON.stringify({ challenge: step.challenge, code: answer.code }));
+        const pair = resultOf<{ access_token?: string; refresh_token?: string }>(verified.json);
+        if (verified.status !== 200 || !pair?.access_token) {
+            emit('fail', { step: 'verify', status: verified.status, reason: verified.status === 200 ? 'login failed' : signInRefusal(verified.status, verified.json) });
+            return undefined;
+        }
+        return { access_token: pair.access_token, refresh_token: pair.refresh_token };
+    }
+    emit('fail', { step: 'verify', reason: 'no code entered — run this again' });
+    return undefined;
+}
+
+/**
+ * Where the code comes from: KEEN_MFA_CODE (ONE answer — a refused code is not asked again), else the terminal
+ * prompt (stdin, the prompt on stderr), else nothing (no terminal, no variable).
+ */
+function codeSource(method: MfaMethod, envCode: string | undefined): ((note: string | undefined) => Promise<CodeAnswer>) | undefined {
+    if (envCode !== undefined) {
+        let used = false;
+        return () => {
+            if (used) {
+                return Promise.resolve(undefined);
+            }
+            used = true;
+            const code = normalizeCode(envCode);
+            return Promise.resolve(code ? { code } : undefined);
+        };
+    }
+    if (process.stdin.isTTY) {
+        return note => askCodeOnTty(method, note, process.stdin, process.stderr);
+    }
+    return undefined;
 }
 
 // ------------------------------------------------------------------ attach

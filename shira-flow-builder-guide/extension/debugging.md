@@ -32,6 +32,14 @@ Every debugger connection is signed in with **your own console account**. Three 
 with `user` + `password`, gets a one-time debug ticket (one connection, valid for 5 minutes), signs out
 again, and attaches. Every start does this again — there is nothing to refresh by hand.
 
+**Two-step sign-in.** When your console account has two-step sign-in (an authenticator app or an e-mailed
+code), the extension — **0.0.6 or newer** — asks the 6-digit code in a box after the password, on every
+start: from your app, or from the e-mail (*Send a new code* mails another). A wrong code is refused like a
+wrong password. *Set up two-step sign-in in the console first* means your organization requires it and your
+account has none yet: set it up in the console (avatar menu → **Account** → **Security**), then start again.
+An extension older than 0.0.6 cannot sign in such an account. The code is never written to `keen.json` or
+the log.
+
 **Where it attaches.** The extension first probes the server's TLS edge on port 443 —
 `https://<server>/keen-debug/flow/dbg/<ticket>` and `wss://<server>/keen-debug/script/dbg/<ticket>/ws`, so only
 port 443 has to be reachable. If the server has no edge (the probe is answered by a redirect, a 404 or a web
@@ -51,7 +59,7 @@ flow nodes it is set on. Every other run runs normally, and `debugger;` statemen
 One debugger window per kind at a time — a second one is closed with *Debugger in use*.
 
 If the start is refused: *bad credentials* → check `user` / `password`; *Forbidden* → your role lacks the
-Debugger permission (ask the owner or an admin); *Debugger is off* → ask the owner or an admin to switch it on; *Space not found* → check `space` in `keen.json`.
+Debugger permission (ask the owner or an admin); *Debugger is off* → ask the owner or an admin to switch it on; *Space not found* → check `space` in `keen.json`; *Sign-in cancelled — no two-step code was entered* → start again and enter the code.
 
 ---
 

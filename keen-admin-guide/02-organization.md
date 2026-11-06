@@ -127,6 +127,9 @@ menu → **Account**). Passwords are never shown or recoverable.
     password stops working the moment the mail is sent; the emailed link sets the new one). The
     owner's account has no **Reset Password** button on the admin side; a locked-out owner goes
     through the engineering team.
+- **Reset MFA** (owner / admin, on the same accounts as **Reset Password**) clears a person's two-step
+  sign-in — for a lost phone or mailbox — and ends their sessions. See *Two-step sign-in* in
+  `01-the-admin-console.md`.
 - **Delete** is **two-step** (Delete → Confirm). Deleting an account also ends any live session it had,
   in the same action.
 
