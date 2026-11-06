@@ -16,10 +16,10 @@ still open their own profile from the avatar menu).
 ## Owner bootstrap — the very first account
 
 Your organization has **exactly one owner**, and it is created **once**, through a one-time
-**activation** screen that is only reachable while there is **no account at all** — not even a
-pending one. The moment the first owner email is submitted, a (still unconfirmed) owner row exists
-and the activation page closes for good — visitors are sent to sign-in — and from then on every new
-teammate is **invited**, never activated. There is no second owner and no self-signup, by design: the
+**activation** screen that is only reachable while the organization has **no confirmed owner**. The
+first owner email submitted there creates a pending (unconfirmed) owner; the page stays open until
+that owner confirms, and the moment they do it closes for good — visitors are sent to sign-in — and
+from then on every new teammate is **invited**, never activated. There is no second owner and no self-signup, by design: the
 first account is always the owner, and the top of the hierarchy can never be accidentally demoted.
 
 ### Create the first owner (activate)
@@ -37,11 +37,11 @@ first account is always the owner, and the top of the hierarchy can never be acc
 4. The owner is now **Active** and can sign in (the login page says *"Account confirmed. Sign in
    with your new password."*). Everyone after this joins by invitation.
 
-> **A typo in the owner email cannot be fixed from the console.** The first submission already
-> counts as "an account exists", so the activation page is closed the instant you press the button —
-> reloading it shows *"Activation is closed"* and sends you to sign-in. If the wrong address was
-> submitted, contact the engineering team (the platform can replace the pending owner from its side,
-> but not through this screen). That's why step 2 says: check the email first.
+> **A typo in the owner email: submit again.** Until the owner confirms, the activation page stays
+> open, and a new submission **replaces** the pending owner: the new address gets a fresh link and
+> every link mailed before stops working. Once an owner has confirmed, the page shows *"Activation is
+> closed"* and sends you to sign-in. Because anyone who reaches `/activate` before the confirmation
+> could replace the pending owner the same way, confirm the link as soon as it arrives.
 
 ## Roles — what a role is
 
